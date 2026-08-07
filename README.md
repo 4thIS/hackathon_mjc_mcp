@@ -152,9 +152,9 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Helper["사용자가 헬퍼 실행<br/>학번·비밀번호 입력(화면에 표시 안 됨)"] --> Store[["세션만 저장<br/>OS 사용자 데이터 경로 (저장소 바깥)"]]
-    Helper -.->|비밀번호는 저장하지 않음| Discard(("1회 사용 후 버림"))
-    Store --> Call["search_courses · get_syllabus 호출"]
+    Helper["헬퍼 실행<br/>학번·비밀번호 입력"] --> Store[["세션만 저장<br/>저장소 바깥"]]
+    Helper -.->|비밀번호는 저장하지 않음| Discard(("1회 쓰고 버림"))
+    Store --> Call["툴 호출<br/>search_courses<br/>get_syllabus"]
     Call --> Valid{"세션 유효?"}
     Valid -->|예| OK["결과 반환"]
     Valid -->|아니오| Guide["'헬퍼를 실행하세요' 안내<br/>자동 재로그인 없음"]

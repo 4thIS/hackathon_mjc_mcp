@@ -266,7 +266,7 @@ class SyllabusDetail(BaseModel):
     source_url: str             # ncsi 원문 링크. 주차별 상세 등은 여기서 확인하도록 안내
 ```
 
-**담당교수 연구실 전화·휴대폰·이메일은 원문에 공개 필드로 존재하지만 포함하지 않는다** — 이름(`professor`)은 이미 `search_courses`가 노출하는 값이라 일관되게 유지하되, 연락처는 툴 응답에 담지 않기로 결정했다(2026-08-07 확인).
+**담당교수 연구실 전화·휴대폰·이메일은 원문에 공개 필드로 존재하지만 포함하지 않는다** — 이름(`professor`)은 이미 `search_courses`가 노출하는 값이라 일관되게 유지하되, 연락처는 툴 응답에 담지 않기로 결정했다(2026-08-07 확인). 모델에서 필드를 빼는 것만으로는 부족해 **파싱 단계에서 추출 자체를 차단한다** — `_CONTACT_LABELS`에 해당하는 `td`는 `get_text()`를 부르지 않고 건너뛴다(그 칸 안에 중첩된 표로 전화번호·이메일이 들어 있다).
 
 **`source_url`은 쿠키 없이 열리는 링크이므로, 이 값이 남는 곳(대화 로그 등)에서는 로그인 없이 해당 강의계획서를 열람할 수 있다.** 학번 등 사용자 식별 정보는 URL에 포함되지 않는다(쿼리 파라미터는 `sbj`/`maj`/`year`/`term`/`group`뿐). 연락처를 모델에서 빼는 데는 공을 들였지만, 그 연락처가 실린 페이지로 이어지는 링크 자체는 나간다는 긴장이 있다 — 심각도는 낮다고 판단한다(강의계획서는 준공개 학술 정보이고, `get_notice`의 `source_url`과 동일한 기존 패턴).
 
@@ -275,6 +275,7 @@ class SyllabusDetail(BaseModel):
 - `common/models.py` — `SyllabusDetail` 추가, `CourseSummary`에 `section: str` 필드 추가
 - `tools/course_search.py` — `parse_courses()`에 `section=row.get("bunban")` 매핑 추가
 - `common/http.py` — `fetch()`가 커스텀 헤더를 받지 않는다(User-Agent 고정). ncsi 요청에 `Referer`를 실어 보내려면 선택적 `headers` 파라미터를 추가해야 한다. ncsi 요청은 쿠키가 필요 없으므로 `fetch_authenticated()`(세션 쿠키 스코프 검증용, `_ALLOWED_AUTH_HOSTS`)가 아니라 `fetch()`(Tier 1 계열, 비인증) 경로에 둔다 — 세션 쿠키를 다루지 않는 요청을 인증 전용 함수에 억지로 태우면 그 함수의 "쿠키가 허용된 호스트로만 나간다"는 보장의 의미가 흐려진다.
+- `tools/syllabus.py`(신규) — 섹션은 헤딩 **완전일치가 아니라 부분일치**로 찾는다(`_find_section`). NCS 기반 전공과목은 헤딩에 접두어가 붙어("NCS정보 및 교과목표") 완전일치로는 전부 깨진다 — 최초 픽스처로 쓴 RISE 특례 교과목만 "교과목표" 단독 형태였던 탓에 뒤늦게 발견했다(실측 fixture 2종으로 회귀 테스트를 건다).
 - `tools/syllabus.py`(신규) — `get_syllabus()`. 흐름: (인증) `POST sugang.mjc.ac.kr/core/lectPlanPop` → 응답 스크립트에서 URL 재구성 → (비인증) 그 URL GET → HTML 파싱. URL 재구성은 순서에 의존하는 따옴표 이어붙이기 대신, **필드명별로 개별 정규식**(`sbj=([^"]*)"` 등)으로 뽑는다 — 주석 처리된 예시 URL이 실측 응답에 남아 있어(`//url = "https://ncsi..."`), 순서 기반 이어붙이기는 주석의 값과 뒤섞인다(실측 중 실제로 재현·확인함). **ncsi 베이스 URL(`https://ncsi.mjc.ac.kr/forMJCCyber/lecture.do`)은 반드시 코드에 고정 상수로 박아두고, sugang 응답 본문에서 호스트/베이스 경로를 추출하지 않는다** — 쿼리 파라미터 값만 정규식으로 뽑는다. sugang 응답 텍스트에서 URL 전체(호스트 포함)를 그대로 가져오면, 그 응답이 조작되거나 변조될 경우 `fetch()`가 임의 호스트로 나갈 수 있다(SSRF 여지).
 
 ### 14.5 에러 처리
@@ -282,6 +283,7 @@ class SyllabusDetail(BaseModel):
 - 세션 없음/만료(툴 호출 시점에 애초에 세션 파일이 없음) → 기존 `require_session`과 동일 경로
 - **`lectPlanPop`은 세션이 만료됐을 때 `200 OK` + "로그아웃" 안내 HTML(`<title>로그아웃</title>`)을 돌려주는 경우가 있다** — `lectList`의 3xx 리다이렉트 실패 모드와 다르다(실측 확인, 세션 수명 20~40분 관찰). 세션이 어떻게 끊겼는지에 따라 302 리다이렉트로 나타나는 경우도 있음을 이후 별도 실측으로 확인했다(2026-08-07, PR #11 리뷰) — 즉 둘 다 실제로 발생한다. 그래서 두 경로 모두 잡는다: `require_active_session()`이 3xx를, `_extract_ncsi_url()`의 마커 체크가 200+로그아웃 타이틀을 잡는다.
 - 위 두 경우가 아닌데도 `lectPlanPop`이 예상한 스크립트 형식을 돌려주지 않으면(사이트 구조 변경 등) `ParseError`로 명시적으로 올린다 — 빈 결과를 성공으로 위장하지 않는다
+- **표 틀은 정상인데 값 칸이 전부 비어 있는 페이지가 있다**(학교가 아직 강의계획서를 작성하지 않은 과목 — 실측상 드물지 않다). `_label_map()`이 비었는지만 보는 검사는 이 경우를 통과시켜, 전 필드가 빈 `SyllabusDetail`을 성공 응답으로 위장한다. 실제 강의계획서라면 학교가 항상 채우는 `교과목명`이 비어 있는지를 별도로 확인해 `NotRegisteredError`를 올린다 — 사이트 구조 변경(`ParseError`)과 원인이 다르므로 타입을 나눠, AI가 "구조가 바뀐 것 같다"가 아니라 "아직 등록되지 않았다"고 답하게 한다.
 
 ### 14.6 범위 밖
 

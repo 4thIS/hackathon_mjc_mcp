@@ -5,6 +5,7 @@
 - 응답은 bytes로 돌려준다. 인코딩 판단은 common.parse의 몫이다.
 """
 
+import threading
 import time
 
 import httpx
@@ -23,6 +24,16 @@ _ALLOWED_AUTH_HOSTS = frozenset({"sugang.mjc.ac.kr"})
 _FORBIDDEN_FETCH_HEADERS = frozenset({"cookie", "authorization"})
 
 _last_request_at: dict[str, float] = {}
+# 동기 툴은 스레드풀에서 병렬로 실행되므로, 같은 호스트의 "간격 확인 → 요청 → 기록"이
+# 겹치지 않게 호스트별 락으로 묶는다. 락 없이는 동시에 들어온 호출이 모두 간격을
+# 지난 것으로 보고 한꺼번에 나간다.
+_host_locks: dict[str, threading.Lock] = {}
+_host_locks_guard = threading.Lock()
+
+
+def _host_lock(host: str) -> threading.Lock:
+    with _host_locks_guard:
+        return _host_locks.setdefault(host, threading.Lock())
 
 
 def _get_once(
@@ -61,21 +72,22 @@ def fetch(
                 raise FetchError("허용되지 않은 요청 헤더")
 
     host = httpx.URL(url).host
-    elapsed = time.monotonic() - _last_request_at.get(host, 0.0)
-    if elapsed < MIN_INTERVAL_SEC:
-        time.sleep(MIN_INTERVAL_SEC - elapsed)
+    with _host_lock(host):
+        elapsed = time.monotonic() - _last_request_at.get(host, 0.0)
+        if elapsed < MIN_INTERVAL_SEC:
+            time.sleep(MIN_INTERVAL_SEC - elapsed)
 
-    try:
         try:
-            return _get_once(url, params, headers)
-        except httpx.HTTPError:
-            time.sleep(MIN_INTERVAL_SEC)
-            return _get_once(url, params, headers)
-    except httpx.HTTPError as exc:
-        # 원문을 담지 않기 위해 타입명만 넘기고 예외 체인을 끊는다.
-        raise FetchError(type(exc).__name__) from None
-    finally:
-        _last_request_at[host] = time.monotonic()
+            try:
+                return _get_once(url, params, headers)
+            except httpx.HTTPError:
+                time.sleep(MIN_INTERVAL_SEC)
+                return _get_once(url, params, headers)
+        except httpx.HTTPError as exc:
+            # 원문을 담지 않기 위해 타입명만 넘기고 예외 체인을 끊는다.
+            raise FetchError(type(exc).__name__) from None
+        finally:
+            _last_request_at[host] = time.monotonic()
 
 
 def _request_once(
@@ -129,21 +141,22 @@ def fetch_authenticated(
         raise FetchError("허용되지 않은 요청 대상")
 
     host = parsed.host
-    elapsed = time.monotonic() - _last_request_at.get(host, 0.0)
-    if elapsed < MIN_INTERVAL_SEC:
-        time.sleep(MIN_INTERVAL_SEC - elapsed)
+    with _host_lock(host):
+        elapsed = time.monotonic() - _last_request_at.get(host, 0.0)
+        if elapsed < MIN_INTERVAL_SEC:
+            time.sleep(MIN_INTERVAL_SEC - elapsed)
 
-    try:
         try:
-            return _request_once(
-                url, cookies=cookies, method=method, data=data, params=params, headers=headers
-            )
-        except httpx.HTTPError:
-            time.sleep(MIN_INTERVAL_SEC)
-            return _request_once(
-                url, cookies=cookies, method=method, data=data, params=params, headers=headers
-            )
-    except httpx.HTTPError as exc:
-        raise FetchError(type(exc).__name__) from None
-    finally:
-        _last_request_at[host] = time.monotonic()
+            try:
+                return _request_once(
+                    url, cookies=cookies, method=method, data=data, params=params, headers=headers
+                )
+            except httpx.HTTPError:
+                time.sleep(MIN_INTERVAL_SEC)
+                return _request_once(
+                    url, cookies=cookies, method=method, data=data, params=params, headers=headers
+                )
+        except httpx.HTTPError as exc:
+            raise FetchError(type(exc).__name__) from None
+        finally:
+            _last_request_at[host] = time.monotonic()

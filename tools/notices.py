@@ -9,6 +9,7 @@ import re
 from typing import Literal
 from urllib.parse import urlencode, urljoin
 
+from bs4 import Comment, NavigableString, Tag
 from mcp.types import ToolAnnotations
 
 from common.cache import with_fallback
@@ -37,6 +38,17 @@ BOARDS: dict[str, tuple[int, str]] = {
 NoticeCategory = Literal["general", "academic", "scholarship", "job"]
 
 _FN_VIEW = re.compile(r"fn_view\('(BM\d+)','(BD\d+)'")
+
+# 이 태그의 앞뒤에서만 줄을 바꾼다. 나머지(span, b, font, a 등)는 글자를 이어 붙인다.
+_BLOCK_TAGS = frozenset(
+    {
+        "address", "article", "blockquote", "dd", "div", "dl", "dt", "figure",
+        "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li",
+        "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th",
+        "thead", "ul",
+    }
+)
+_SKIP_TAGS = frozenset({"script", "style"})
 
 
 def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
@@ -72,6 +84,55 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
         )
 
     return notices
+
+
+def _flatten_lines(element: Tag) -> list[str]:
+    """본문을 줄 목록으로 만든다.
+
+    편집기가 글자를 span 조각으로 잘게 나눠 저장하므로, 블록 경계와 <br>에서만
+    줄을 바꾸고 원문의 공백·줄바꿈은 공백 하나로 접는다. 표는 행 하나를
+    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다.
+    """
+    lines: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        line = " ".join("".join(buffer).split())
+        buffer.clear()
+        if line:
+            lines.append(line)
+
+    def walk(node) -> None:
+        if isinstance(node, Comment):
+            return
+        if isinstance(node, NavigableString):
+            buffer.append(str(node))
+            return
+        if not isinstance(node, Tag) or node.name in _SKIP_TAGS:
+            return
+        if node.name == "br":
+            flush()
+        elif node.name == "tr":
+            flush()
+            cells = [
+                " ".join(_flatten_lines(cell))
+                for cell in node.find_all(["td", "th"], recursive=False)
+            ]
+            if any(cells):
+                lines.append(" | ".join(cells))
+        elif node.name in _BLOCK_TAGS:
+            flush()
+            for child in node.children:
+                walk(child)
+            flush()
+        else:
+            for child in node.children:
+                walk(child)
+
+    for child in element.children:
+        walk(child)
+    flush()
+    return lines
 
 
 def _fetch_list(menu_idx: int) -> dict:
@@ -120,7 +181,7 @@ def parse_notice_detail(content: bytes, source_url: str) -> NoticeDetail:
             info[header.get_text(strip=True)] = cell.get_text(strip=True)
 
     memo = view.select_one("#divMemo")
-    body = memo.get_text("\n", strip=True) if memo is not None else ""
+    body = "\n".join(_flatten_lines(memo)) if memo is not None else ""
     truncated = len(body) > MAX_BODY_CHARS
     body = body[:MAX_BODY_CHARS] if body else _IMAGE_ONLY_BODY
 

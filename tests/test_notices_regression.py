@@ -31,6 +31,9 @@ ATTACHMENT_DETAIL_URL = (
     "?menu_idx=208&bbs_mst_idx=BM0000000032&data_idx=BD0000001001"
 )
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# latin-1 같은 단일 바이트 인코딩으로 잘못 읽으면 U+FFFD 없이 글자가 깨진다.
+# 학교 공지는 항상 한글을 포함하므로 한글이 사라졌는지로 잡는다.
+_HANGUL = re.compile(r"[가-힣]")
 
 
 def _is_iso_date(value: str) -> bool:
@@ -78,6 +81,11 @@ def test_title_and_department_are_present_without_mojibake(board):
     assert all(n.title and n.department for n in notices)
     joined = "".join(n.title + n.department for n in notices)
     assert "�" not in joined
+
+
+def test_titles_contain_hangul(board):
+    _, notices = board
+    assert _HANGUL.search("".join(n.title for n in notices))
 
 
 def test_views_are_non_negative(board):
@@ -130,6 +138,10 @@ def test_attachment_detail_has_no_mojibake(attachment_detail):
         + "".join(attachment_detail.attachments)
     )
     assert "�" not in text
+
+
+def test_attachment_detail_contains_hangul(attachment_detail):
+    assert _HANGUL.search(attachment_detail.title + attachment_detail.body)
 
 
 def test_attachment_detail_image_urls_are_absolute(attachment_detail):

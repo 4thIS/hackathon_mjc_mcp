@@ -153,3 +153,60 @@ def test_cached_detail_without_new_fields_still_loads():
     )
     assert detail.source_url == ""
     assert detail.body_images == []
+
+
+# --- ms-04: 본문 평탄화 ---
+
+TEXT_DETAIL_FIXTURE = Path(__file__).parent / "fixtures" / "notice_detail_text.html"
+TEXT_DETAIL_URL = (
+    "https://www.mjc.ac.kr/bbs/data/view.do"
+    "?menu_idx=169&bbs_mst_idx=BM0000000025&data_idx=BD0050388098"
+)
+
+
+def _body(inner: str) -> str:
+    html = f"<div class='board_view'><div id='divMemo'>{inner}</div></div>"
+    return parse_notice_detail(html.encode("utf-8"), DETAIL_URL).body
+
+
+def test_inline_tags_are_joined_without_newlines():
+    assert _body("<p><span>2026</span><span>학년도 </span><b>2</b>학기</p>") == "2026학년도 2학기"
+
+
+def test_block_boundaries_become_newlines():
+    assert _body("<p>첫 줄</p><div>둘째 줄</div>셋째<br>넷째") == "첫 줄\n둘째 줄\n셋째\n넷째"
+
+
+def test_source_whitespace_collapses_and_empty_blocks_vanish():
+    assert _body("<p>  가\n   나  </p><p><br></p><p>&nbsp;</p><p>다</p>") == "가 나\n다"
+
+
+def test_comments_and_scripts_are_not_body_text():
+    assert _body("<!-- 숨김 --><script>var a=1;</script><style>p{}</style><p>본문</p>") == "본문"
+
+
+def test_table_rows_become_one_line_each_in_order():
+    body = _body(
+        "<p>안내</p><table>"
+        "<tr><th>구분</th><th>기간</th></tr>"
+        "<tr><td><p>1차</p></td><td><p>09.01.~</p><p>09.30.</p></td></tr>"
+        "<tr><td>2차</td><td><span>10.</span><span>01.</span></td></tr>"
+        "</table><p>끝</p>"
+    )
+    assert body == "안내\n구분 | 기간\n1차 | 09.01.~ 09.30.\n2차 | 10.01.\n끝"
+
+
+def test_real_text_notice_is_not_fragmented():
+    body = parse_notice_detail(TEXT_DETAIL_FIXTURE.read_bytes(), TEXT_DETAIL_URL).body
+    assert "학사내규 제2조(등록)" in body
+    assert "1. 학기 개시일 : 2026.09.01" in body
+    assert "학기 개시일로부터 30일까지 | 2026.09.01.~ 2026.09.30. | 등록금의 6분의 5 해당액" in body
+    assert "\n(\n" not in body  # 괄호가 따로 한 줄을 차지하던 문제
+    assert "개발 확인 사항" not in body  # HTML 주석
+
+
+def test_real_text_notice_keeps_image_links_and_is_not_image_only():
+    detail = parse_notice_detail(TEXT_DETAIL_FIXTURE.read_bytes(), TEXT_DETAIL_URL)
+    assert "body_images" not in detail.body
+    assert len(detail.body_images) == 2
+    assert detail.truncated is False

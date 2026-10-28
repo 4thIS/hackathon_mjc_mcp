@@ -9,9 +9,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-# 혼잡 단계 경계(이용률 %). 반올림 전 값으로 비교한다.
-CONGESTION_NORMAL_FROM = 50
-CONGESTION_BUSY_FROM = 80
+# 혼잡 단계 경계(이용률 %). 이 값을 넘으면 다음 단계이며, 반올림 전 값으로 비교한다.
+# 대학 도서관 혼잡도 서비스 Occuspace(Waitz)의 공개 기준과 같다.
+# https://docs.occuspace.io/guides/using-live-data
+CONGESTION_NORMAL_ABOVE = 45
+CONGESTION_BUSY_ABOVE = 80
 
 LIBRARY_NOTE = (
     "measured_at은 우리 서버가 좌석 정보를 조회한 시각이며, 학교가 좌석 수를 갱신한 시각이 아니다. "
@@ -30,7 +32,7 @@ class ReadingRoom(BaseModel):
     )
     congestion: Literal["여유", "보통", "혼잡"] | None = Field(
         default=None,
-        description="혼잡 단계. 이용률 50% 미만 여유, 50% 이상 80% 미만 보통, 80% 이상 혼잡. "
+        description="혼잡 단계. 이용률 45% 이하 여유, 45% 초과 80% 이하 보통, 80% 초과 혼잡. "
         "총 좌석이 0이면 null.",
     )
 
@@ -44,9 +46,9 @@ class ReadingRoom(BaseModel):
             return self
         rate = self.in_use / self.total * 100
         self.usage_rate = round(rate, 1)
-        if rate >= CONGESTION_BUSY_FROM:
+        if rate > CONGESTION_BUSY_ABOVE:
             self.congestion = "혼잡"
-        elif rate >= CONGESTION_NORMAL_FROM:
+        elif rate > CONGESTION_NORMAL_ABOVE:
             self.congestion = "보통"
         else:
             self.congestion = "여유"

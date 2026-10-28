@@ -59,13 +59,14 @@ def test_usage_rate_is_in_use_over_total_percent(total, in_use, rate):
     ("total", "in_use", "level"),
     [
         (100, 0, "여유"),
-        (100, 49, "여유"),
-        (100, 50, "보통"),
-        (100, 79, "보통"),
-        (100, 80, "혼잡"),
+        (100, 45, "여유"),
+        (100, 46, "보통"),
+        (100, 80, "보통"),
+        (100, 81, "혼잡"),
         (100, 100, "혼잡"),
-        # 반올림 전 값으로 나눈다: 79.96%는 표시가 80.0이어도 보통이다.
-        (2501, 2000, "보통"),
+        # 반올림 전 값으로 나눈다: 표시가 45.0·80.0이어도 실제로 넘었으면 다음 단계다.
+        (10001, 4501, "보통"),
+        (2499, 2000, "혼잡"),
     ],
 )
 def test_congestion_level_boundaries(total, in_use, level):
@@ -79,8 +80,8 @@ def test_room_without_seats_has_no_rate_or_level():
 
 
 def test_rate_and_level_are_in_the_dumped_response():
-    dumped = _room(100, 80).model_dump(mode="json")
-    assert dumped["usage_rate"] == 80.0
+    dumped = _room(100, 90).model_dump(mode="json")
+    assert dumped["usage_rate"] == 90.0
     assert dumped["congestion"] == "혼잡"
 
 
@@ -124,4 +125,5 @@ def test_rate_and_level_are_described_in_the_tool_schema():
     """반환 모델의 스키마가 AI가 읽는 도구 설명이다. 새 값도 설명과 함께 나와야 한다."""
     props = LibrarySeatReport.model_json_schema()["$defs"]["ReadingRoom"]["properties"]
     assert props["usage_rate"]["description"]
+    assert "45%" in props["congestion"]["description"]
     assert "80%" in props["congestion"]["description"]

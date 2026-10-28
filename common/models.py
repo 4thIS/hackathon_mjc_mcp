@@ -78,7 +78,10 @@ class NoticeDetail(BaseModel):
 
 
 class Department(BaseModel):
-    code: str = Field(description="search_courses의 department_code에 그대로 넘길 학과 코드")
+    code: str = Field(
+        description="학과 코드. 학과 코드를 인자로 받는 도구가 있으면 이 값을 그대로 넘길 것. "
+        "직접 만들어 내지 말 것."
+    )
     name: str = Field(description="학과명")
 
 

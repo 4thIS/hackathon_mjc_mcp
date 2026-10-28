@@ -6,13 +6,14 @@ AI는 의미 있는 카테고리 이름만 쓰고, 상세 조회에는 목록이
 """
 
 import re
+from datetime import datetime
 from typing import Literal
 from urllib.parse import urlencode, urljoin
 
 from mcp.types import ToolAnnotations
 
 from common.cache import with_fallback
-from common.errors import ParseError
+from common.errors import ParseError, ToolError
 from common.http import fetch
 from common.models import NoticeDetail, NoticeList, NoticeSummary
 from common.parse import parse_html
@@ -35,6 +36,7 @@ BOARDS: dict[str, tuple[int, str]] = {
 }
 
 NoticeCategory = Literal["general", "academic", "scholarship", "job"]
+NoticeSort = Literal["board", "newest", "oldest"]
 
 _FN_VIEW = re.compile(r"fn_view\('(BM\d+)','(BD\d+)'")
 
@@ -60,6 +62,8 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
 
         # 첫 칸이 행마다 번호/공지 아이콘으로 달라지므로 뒤에서부터 센다.
         views_text = cells[-1].get_text(strip=True)
+        # 첨부가 있는 글만 첨부 칸에 아이콘 이미지가 들어 있다.
+        has_attachment = cells[-4].find("img") is not None if len(cells) >= 4 else False
         notices.append(
             NoticeSummary(
                 notice_id=f"{menu_idx}:{match.group(1)}:{match.group(2)}",
@@ -68,6 +72,7 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
                 posted_on=cells[-2].get_text(strip=True),
                 views=int(views_text) if views_text.isdigit() else 0,
                 pinned="cell_notice" in (row.get("class") or []),
+                has_attachment=has_attachment,
             )
         )
 
@@ -81,22 +86,58 @@ def _fetch_list(menu_idx: int) -> dict:
     return {"notices": [n.model_dump(mode="json") for n in notices]}
 
 
+def _check_date(name: str, value: str | None) -> None:
+    if value is None:
+        return
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ToolError(
+            f"{name} 날짜 형식이 잘못되었습니다. YYYY-MM-DD 형식(예: 2026-10-01)으로 넘겨 주세요."
+        ) from None
+
+
 def search_notices(
-    category: NoticeCategory = "academic", limit: int = 10
+    category: NoticeCategory = "academic",
+    limit: int = 10,
+    since: str | None = None,
+    until: str | None = None,
+    sort: NoticeSort = "board",
+    exclude_pinned: bool = False,
 ) -> NoticeList:
-    """명지전문대 공지 게시판의 최신 글 목록을 조회한다.
+    """명지전문대 공지 게시판 첫 쪽의 글 목록을 조회한다.
 
     category: general(일반 공지사항), academic(학사), scholarship(장학), job(채용)
+    since, until: 작성일 범위(YYYY-MM-DD). 두 날짜 모두 당일을 포함한다.
+    sort: board(게시판 순서 — 상단 고정 글이 먼저, 그다음 일반 글 최신순),
+          newest(작성일 최신순), oldest(작성일 오래된순)
+    exclude_pinned: true면 상단 고정 글을 뺀다.
+    필터·정렬을 적용한 뒤 limit개까지 돌려준다.
     본문 전문이 필요하면 결과의 notice_id를 get_notice에 넘긴다.
     """
     if category not in BOARDS:
         raise ParseError(f"알 수 없는 게시판 '{category}'")
+    _check_date("since", since)
+    _check_date("until", until)
     menu_idx, board_name = BOARDS[category]
 
     data, stale_age_min = with_fallback(
         f"notices_{category}", lambda: _fetch_list(menu_idx)
     )
     notices = [NoticeSummary.model_validate(n) for n in data["notices"]]
+
+    # 필터·정렬은 캐시에서 읽은 값에도 똑같이 적용되도록 조회 뒤에 한다.
+    if exclude_pinned:
+        notices = [n for n in notices if not n.pinned]
+    if since is not None:
+        notices = [n for n in notices if n.posted_on >= since]
+    if until is not None:
+        notices = [n for n in notices if n.posted_on <= until]
+    if sort != "board":
+        notices.sort(key=lambda n: n.posted_on, reverse=sort == "newest")
+
     return NoticeList(
         category=board_name,
         notices=notices[: max(1, limit)],

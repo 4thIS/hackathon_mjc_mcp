@@ -118,3 +118,20 @@ class SyllabusDetail(BaseModel):
         description="강의계획서 원문(ncsi) 링크. 주차별 계획·교재·장애학생 지원 등 "
         "이 모델에 없는 상세는 여기서 직접 확인하도록 안내할 것"
     )
+
+
+class CalendarEvent(BaseModel):
+    name: str = Field(description="일정 이름")
+    start: str = Field(description="시작일 (YYYY-MM-DD)")
+    end: str = Field(description="종료일 (YYYY-MM-DD). 하루짜리 일정은 시작일과 같다.")
+
+
+class AcademicCalendar(BaseModel):
+    events: list[CalendarEvent] = Field(
+        description="학사일정 목록. 학교 페이지에 나온 순서(대체로 시작일순)."
+    )
+    stale_age_min: int | None = Field(
+        default=None,
+        description="학교 서버 조회에 실패해 캐시된 값을 반환한 경우, "
+        "그 값이 몇 분 전 것인지. 실시간 조회에 성공했다면 null.",
+    )

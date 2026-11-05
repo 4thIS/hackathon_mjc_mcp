@@ -97,3 +97,52 @@ def test_uses_cache_when_fetch_fails(calendar_env, monkeypatch):
     result = get_academic_calendar(since="2026-10-25", until="2026-10-31")
     assert result.stale_age_min is not None
     assert [e.name for e in result.events] == ["2학기 중간고사"]
+
+
+def test_rejects_reversed_range(calendar_env):
+    with pytest.raises(ToolError, match="since가 until보다 늦습니다"):
+        get_academic_calendar(since="2026-10-26", until="2026-10-20")
+
+
+def test_validates_arguments_before_fetching(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_fetch(*a, **k):
+        calls.append(k)
+        return FIXTURE.read_bytes()
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(calendar_module, "fetch", fake_fetch)
+    with pytest.raises(ToolError):
+        get_academic_calendar(since="다음주")
+    with pytest.raises(ToolError):
+        get_academic_calendar(since="2026-10-26", until="2026-10-20")
+    assert calls == []  # 학교로 요청이 나가지 않는다
+
+
+def test_range_without_events_returns_empty_list(calendar_env):
+    """해당 기간에 일정이 없는 것은 오류가 아니다."""
+    assert get_academic_calendar(since="2030-01-01").events == []
+    assert get_academic_calendar(until="2000-01-01").events == []
+
+
+def test_raises_parse_error_when_event_name_is_missing():
+    html = "<div class='memo'><h4>2026.10.20~2026.10.26</h4></div>".encode()
+    with pytest.raises(ParseError):
+        parse_calendar(html)
+
+
+def test_period_allows_spaces_around_tilde():
+    html = "<div class='memo'><h4>2026.10.20 ~ 2026.10.26</h4><p>시험</p></div>".encode()
+    [event] = parse_calendar(html)
+    assert (event.name, event.start, event.end) == ("시험", "2026-10-20", "2026-10-26")
+
+
+def test_fetch_failure_without_cache_raises(tmp_path, monkeypatch):
+    def fail(*a, **k):
+        raise FetchError("시험")
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(calendar_module, "fetch", fail)
+    with pytest.raises(FetchError):
+        get_academic_calendar()

@@ -75,9 +75,14 @@ def get_academic_calendar(
     학교 페이지에 보이는 현재 학기 6개월치만 조회할 수 있다.
     since, until: 기간(YYYY-MM-DD, 당일 포함). 이 기간과 하루라도 겹치는 일정을
     모두 돌려준다. 예를 들어 10-20~10-26 중간고사는 since=10-25로 물어도 포함된다.
+    since가 until보다 늦으면 오류.
     """
     _check_date("since", since)
     _check_date("until", until)
+    if since is not None and until is not None and since > until:
+        raise ToolError(
+            "since가 until보다 늦습니다. 두 날짜의 순서를 바꿔 다시 요청해 주세요."
+        )
 
     data, stale_age_min = with_fallback("academic_calendar", _fetch_calendar)
     events = [CalendarEvent.model_validate(e) for e in data["events"]]

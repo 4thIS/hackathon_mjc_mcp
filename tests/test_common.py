@@ -1,4 +1,5 @@
 import json
+import threading
 
 import httpx
 import pytest
@@ -302,6 +303,54 @@ def test_fetch_does_not_wait_for_a_different_host(http_env, monkeypatch):
     http.fetch("https://lib.example.ac.kr/a")
     http.fetch("https://www.example.ac.kr/a")
     assert http_env == []
+
+
+def _run_simultaneous_calls(monkeypatch, call, count):
+    """같은 호스트로 count개 호출을 동시에 시작하고, 요청이 동시에 진행된 최대 개수를 돌려준다.
+
+    공개 서버에서는 동기 툴이 스레드풀에서 병렬로 실행되므로 이 상황이 실제로 생긴다.
+    """
+    state = {"active": 0, "max_active": 0}
+    guard = threading.Lock()
+
+    def handler(request):
+        with guard:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        threading.Event().wait(0.05)  # 겹치는 요청이 서로 보일 만큼만 붙잡는다
+        with guard:
+            state["active"] -= 1
+        return httpx.Response(200, content=b"ok")
+
+    _install_mock_transport(monkeypatch, handler)
+    threads = [threading.Thread(target=call) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return state["max_active"]
+
+
+def test_fetch_serializes_simultaneous_same_host_calls(http_env, monkeypatch):
+    max_active = _run_simultaneous_calls(
+        monkeypatch, lambda: http.fetch("https://lib.example.ac.kr/a"), count=4
+    )
+
+    assert max_active == 1  # 요청이 겹치지 않는다
+    assert len(http_env) == 3  # 첫 호출만 안 기다리고 나머지 3개는 각자 간격을 기다린다
+    assert all(0.5 < wait <= http.MIN_INTERVAL_SEC for wait in http_env)
+
+
+def test_fetch_authenticated_serializes_simultaneous_same_host_calls(http_env, monkeypatch):
+    max_active = _run_simultaneous_calls(
+        monkeypatch,
+        lambda: http.fetch_authenticated("https://sugang.mjc.ac.kr/a", cookies={}),
+        count=4,
+    )
+
+    assert max_active == 1
+    assert len(http_env) == 3
+    assert all(0.5 < wait <= http.MIN_INTERVAL_SEC for wait in http_env)
 
 
 def test_fetch_sends_custom_headers(http_env, monkeypatch):

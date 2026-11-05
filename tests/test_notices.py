@@ -210,3 +210,29 @@ def test_real_text_notice_keeps_image_links_and_is_not_image_only():
     assert "body_images" not in detail.body
     assert len(detail.body_images) == 2
     assert detail.truncated is False
+
+
+def test_inline_tags_nested_200_levels_deep_are_read():
+    assert _body("<span>" * 200 + "글자" + "</span>" * 200) == "글자"
+
+
+def test_list_items_become_one_line_each():
+    assert _body("<ul><li>하나</li><li><b>둘</b>째</li></ul><ol><li>셋</li></ol>") == "하나\n둘째\n셋"
+
+
+def test_empty_cell_keeps_its_column_position():
+    assert _body("<table><tr><td>가</td><td></td><td>다</td></tr></table>") == "가 |  | 다"
+
+
+def test_row_with_only_empty_cells_is_dropped():
+    assert _body("<table><tr><td>&nbsp;</td><td></td></tr><tr><td>값</td></tr></table>") == "값"
+
+
+def test_table_with_tbody_and_nested_table_keeps_order():
+    body = _body(
+        "<table><tbody><tr>"
+        "<td>밖<table><tr><td>안1</td><td>안2</td></tr></table></td>"
+        "<td>옆</td>"
+        "</tr></tbody></table>"
+    )
+    assert body == "밖 안1 | 안2 | 옆"

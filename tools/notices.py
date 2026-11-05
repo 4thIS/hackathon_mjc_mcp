@@ -112,8 +112,9 @@ def search_notices(
     category: general(일반 공지사항), academic(학사), scholarship(장학), job(채용)
     since, until: 작성일 범위(YYYY-MM-DD). 두 날짜 모두 당일을 포함한다.
                   since가 until보다 늦으면 오류.
-                  게시판 첫 쪽에 있는 글 안에서만 거른다. 빈 목록이 그 기간에
-                  공지가 없었다는 뜻은 아니다(더 오래된 글은 첫 쪽에 없다).
+                  게시판 첫 쪽(상단 고정 글 + 최신 일반 글)에 있는 글만 거른다.
+                  첫 쪽의 가장 오래된 일반 글보다 이른 기간은 결과가 비거나
+                  일부만 나오므로, 결과를 그 기간의 전체 공지로 단정하지 말 것.
     sort: board(게시판 순서 — 상단 고정 글이 먼저, 그다음 일반 글 최신순),
           newest(작성일 최신순), oldest(작성일 오래된순)
     exclude_pinned: true면 상단 고정 글을 뺀다.

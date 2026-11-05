@@ -127,7 +127,25 @@ def test_range_without_events_returns_empty_list(calendar_env):
 
 
 def test_raises_parse_error_when_event_name_is_missing():
-    html = "<div class='memo'><h4>2026.10.20~2026.10.26</h4></div>".encode()
+    """정상 일정이 함께 있어도, 이름 없는 일정을 조용히 건너뛰지 않는다."""
+    html = (
+        "<div class='memo'>"
+        "<h4>2026.10.01~2026.10.02</h4><p>정상 일정</p>"
+        "<h4>2026.10.20~2026.10.26</h4>"
+        "</div>"
+    ).encode()
+    with pytest.raises(ParseError):
+        parse_calendar(html)
+
+
+def test_event_without_name_does_not_borrow_the_next_name():
+    """기간 바로 다음이 이름이 아니면, 뒤에 오는 다른 일정의 이름을 가져가지 않는다."""
+    html = (
+        "<div class='memo'>"
+        "<h4>2026.10.20~2026.10.26</h4>"
+        "<h4>2026.11.01~2026.11.02</h4><p>뒤 일정 이름</p>"
+        "</div>"
+    ).encode()
     with pytest.raises(ParseError):
         parse_calendar(html)
 

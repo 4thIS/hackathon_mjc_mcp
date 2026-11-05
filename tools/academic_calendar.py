@@ -29,8 +29,10 @@ def parse_calendar(content: bytes) -> list[CalendarEvent]:
     for memo in soup.select("div.memo"):
         for heading in memo.select("h4"):
             match = _PERIOD.search(heading.get_text(strip=True))
-            name_element = heading.find_next_sibling("p")
-            if match is None or name_element is None:
+            # 이름은 기간 바로 다음 요소여야 한다. 건너뛰어 찾으면 이름 없는 일정이
+            # 뒤에 오는 다른 일정의 이름을 가져간다.
+            name_element = heading.find_next_sibling()
+            if match is None or name_element is None or name_element.name != "p":
                 raise ParseError("학사일정")
             y1, m1, d1, y2, m2, d2 = match.groups()
             event = CalendarEvent(

@@ -314,3 +314,14 @@ def test_row_without_attachment_column_is_not_marked():
     ).encode("utf-8")
     [notice] = parse_notice_list(html, menu_idx=169)
     assert notice.has_attachment is False
+
+
+def test_search_sorts_before_applying_limit(list_env):
+    """자르기가 정렬보다 먼저면 게시판 앞 2건(08-04, 08-03)이 나온다."""
+    result = search_notices(sort="oldest", limit=2)
+    assert [n.posted_on for n in result.notices] == ["2022-01-13", "2026-05-28"]
+
+
+def test_search_without_matching_notices_returns_empty_list(list_env):
+    """조건에 맞는 글이 없는 것은 오류가 아니다."""
+    assert search_notices(since="2030-01-01").notices == []

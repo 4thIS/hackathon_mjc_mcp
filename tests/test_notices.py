@@ -245,3 +245,22 @@ def test_too_deeply_nested_body_raises_parse_error():
     """
     with pytest.raises(ParseError):
         _body("<span>" * 2000 + "글자" + "</span>" * 2000)
+
+
+def test_single_cell_row_keeps_its_lines():
+    """칸이 하나뿐인 행은 테두리 상자다. 칸 안의 문단·목록을 한 줄로 뭉치지 않는다."""
+    body = _body(
+        "<table><tr><td>"
+        "<p>1. 신청기간: 9.1.~9.5.</p><p>2. 신청방법: 온라인</p>"
+        "<ul><li>유의 하나</li><li>유의 둘</li></ul>"
+        "</td></tr></table>"
+    )
+    assert body == "1. 신청기간: 9.1.~9.5.\n2. 신청방법: 온라인\n유의 하나\n유의 둘"
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["center", "main", "aside", "nav", "figcaption", "details", "summary", "fieldset", "form"],
+)
+def test_other_block_tags_also_break_lines(tag):
+    assert _body(f"<{tag}>제목</{tag}><{tag}>부제</{tag}>") == "제목\n부제"

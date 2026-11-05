@@ -42,10 +42,11 @@ _FN_VIEW = re.compile(r"fn_view\('(BM\d+)','(BD\d+)'")
 # 이 태그의 앞뒤에서만 줄을 바꾼다. 나머지(span, b, font, a 등)는 글자를 이어 붙인다.
 _BLOCK_TAGS = frozenset(
     {
-        "address", "article", "blockquote", "dd", "div", "dl", "dt", "figure",
-        "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li",
-        "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th",
-        "thead", "ul",
+        "address", "article", "aside", "blockquote", "center", "dd", "details",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav",
+        "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
+        "th", "thead", "ul",
     }
 )
 _SKIP_TAGS = frozenset({"script", "style"})
@@ -91,7 +92,8 @@ def _flatten_lines(element: Tag) -> list[str]:
 
     편집기가 글자를 span 조각으로 잘게 나눠 저장하므로, 블록 경계와 <br>에서만
     줄을 바꾸고 원문의 공백·줄바꿈은 공백 하나로 접는다. 표는 행 하나를
-    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다.
+    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다. 칸이 하나뿐인 행은
+    칸 안의 줄을 그대로 둔다.
     """
     lines: list[str] = []
     buffer: list[str] = []
@@ -115,11 +117,14 @@ def _flatten_lines(element: Tag) -> list[str]:
         elif node.name == "tr":
             flush()
             cells = [
-                " ".join(_flatten_lines(cell))
+                _flatten_lines(cell)
                 for cell in node.find_all(["td", "th"], recursive=False)
             ]
-            if any(cells):
-                lines.append(" | ".join(cells))
+            if len(cells) == 1:
+                # 칸이 하나뿐인 행은 표가 아니라 테두리 상자다. 칸 안의 줄을 그대로 둔다.
+                lines.extend(cells[0])
+            elif any(cells):
+                lines.append(" | ".join(" ".join(cell) for cell in cells))
         elif node.name in _BLOCK_TAGS:
             flush()
             for child in node.children:

@@ -165,7 +165,13 @@ def test_fetch_failure_without_cache_raises(tmp_path, monkeypatch):
 
 
 def test_raises_parse_error_when_event_name_is_blank():
-    html = "<div class='memo'><h4>2026.10.20~2026.10.26</h4><p> &nbsp; </p></div>".encode()
+    """정상 일정이 함께 있어도, 이름이 빈 일정을 조용히 건너뛰지 않는다."""
+    html = (
+        "<div class='memo'>"
+        "<h4>2026.09.01~2026.09.01</h4><p>개강일</p>"
+        "<h4>2026.10.20~2026.10.26</h4><p> &nbsp; </p>"
+        "</div>"
+    ).encode()
     with pytest.raises(ParseError):
         parse_calendar(html)
 
@@ -188,6 +194,12 @@ def test_event_name_keeps_spaces_between_inline_tags():
     ],
 )
 def test_raises_parse_error_when_period_is_not_a_real_range(period):
-    html = f"<div class='memo'><h4>{period}</h4><p>일정</p></div>".encode()
+    """정상 일정이 함께 있어도, 기간이 틀린 일정을 조용히 건너뛰지 않는다."""
+    html = (
+        "<div class='memo'>"
+        "<h4>2026.09.01~2026.09.01</h4><p>개강일</p>"
+        f"<h4>{period}</h4><p>일정</p>"
+        "</div>"
+    ).encode()
     with pytest.raises(ParseError):
         parse_calendar(html)

@@ -236,3 +236,12 @@ def test_table_with_tbody_and_nested_table_keeps_order():
         "</tr></tbody></table>"
     )
     assert body == "밖 안1 | 안2 | 옆"
+
+
+def test_too_deeply_nested_body_raises_parse_error():
+    """파이썬 재귀 한도를 넘게 겹친 본문은 RecursionError가 아니라 ParseError여야 한다.
+
+    ParseError는 ToolError라서 get_notice의 캐시 폴백이 동작한다.
+    """
+    with pytest.raises(ParseError):
+        _body("<span>" * 2000 + "글자" + "</span>" * 2000)

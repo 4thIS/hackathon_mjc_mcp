@@ -181,7 +181,12 @@ def parse_notice_detail(content: bytes, source_url: str) -> NoticeDetail:
             info[header.get_text(strip=True)] = cell.get_text(strip=True)
 
     memo = view.select_one("#divMemo")
-    body = "\n".join(_flatten_lines(memo)) if memo is not None else ""
+    try:
+        body = "\n".join(_flatten_lines(memo)) if memo is not None else ""
+    except RecursionError:
+        # 태그가 재귀 한도를 넘게 겹친 본문. ToolError 경계 안에 머물러야
+        # get_notice의 캐시 폴백이 동작한다.
+        raise ParseError("공지 본문") from None
     truncated = len(body) > MAX_BODY_CHARS
     body = body[:MAX_BODY_CHARS] if body else _IMAGE_ONLY_BODY
 

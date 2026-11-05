@@ -5,8 +5,20 @@ Field(description=...)이 AI가 읽는 스키마 설명이 된다.
 """
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+# 혼잡 단계 경계(이용률 %). 이 값을 넘으면 다음 단계이며, 반올림 전 값으로 비교한다.
+# 대학 도서관 혼잡도 서비스 Occuspace(Waitz)의 공개 기준과 같다.
+# https://docs.occuspace.io/guides/using-live-data
+CONGESTION_NORMAL_ABOVE = 45
+CONGESTION_BUSY_ABOVE = 80
+
+LIBRARY_NOTE = (
+    "measured_at은 우리 서버가 좌석 정보를 조회한 시각이며, 학교가 좌석 수를 갱신한 시각이 아니다. "
+    "이 좌석 수치만으로는 도서관이나 열람실이 지금 운영 중인지 알 수 없다."
+)
 
 
 class ReadingRoom(BaseModel):
@@ -14,6 +26,33 @@ class ReadingRoom(BaseModel):
     total: int = Field(description="총 좌석 수")
     in_use: int = Field(description="현재 사용 중인 좌석 수")
     available: int = Field(description="현재 이용 가능한 잔여 좌석 수")
+    usage_rate: float | None = Field(
+        default=None,
+        description="이용률(%). 사용 중인 좌석 ÷ 총 좌석, 소수 첫째 자리. 총 좌석이 0이면 null.",
+    )
+    congestion: Literal["여유", "보통", "혼잡"] | None = Field(
+        default=None,
+        description="혼잡 단계. 이용률 45% 이하 여유, 45% 초과 80% 이하 보통, 80% 초과 혼잡. "
+        "총 좌석이 0이면 null.",
+    )
+
+    # computed_field는 MCP output schema에 나오지 않아 일반 필드로 두고 검증 뒤에 채운다.
+    # 입력값은 무시하고 total·in_use로 다시 계산하므로 옛 캐시에서도 같은 값이 나온다.
+    @model_validator(mode="after")
+    def _fill_usage(self) -> "ReadingRoom":
+        if self.total <= 0:
+            self.usage_rate = None
+            self.congestion = None
+            return self
+        rate = self.in_use / self.total * 100
+        self.usage_rate = round(rate, 1)
+        if rate > CONGESTION_BUSY_ABOVE:
+            self.congestion = "혼잡"
+        elif rate > CONGESTION_NORMAL_ABOVE:
+            self.congestion = "보통"
+        else:
+            self.congestion = "여유"
+        return self
 
 
 class LibrarySeatReport(BaseModel):
@@ -26,6 +65,10 @@ class LibrarySeatReport(BaseModel):
         default=None,
         description="학교 서버 조회에 실패해 캐시된 값을 반환한 경우, "
         "그 값이 몇 분 전 것인지. 실시간 조회에 성공했다면 null.",
+    )
+    note: str = Field(
+        default=LIBRARY_NOTE,
+        description="이 응답을 해석할 때 지켜야 할 안내. 사용자에게 답할 때 함께 전할 것.",
     )
 
 

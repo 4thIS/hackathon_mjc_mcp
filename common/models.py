@@ -38,11 +38,17 @@ class NoticeSummary(BaseModel):
     posted_on: str = Field(description="작성일 (YYYY-MM-DD)")
     views: int = Field(description="조회수")
     pinned: bool = Field(description="상단 고정 공지 여부")
+    has_attachment: bool | None = Field(
+        default=None,
+        description="첨부파일 여부. 이 값이 생기기 전에 저장된 캐시에서 읽었다면 null(모름).",
+    )
 
 
 class NoticeList(BaseModel):
     category: str = Field(description="조회한 게시판 이름")
-    notices: list[NoticeSummary] = Field(description="공지 목록. 최신순.")
+    notices: list[NoticeSummary] = Field(
+        description="공지 목록. 순서는 요청한 sort를 따른다."
+    )
     stale_age_min: int | None = Field(
         default=None,
         description="학교 서버 조회에 실패해 캐시된 값을 반환한 경우, "

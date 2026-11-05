@@ -1,10 +1,19 @@
+import json
+import time
 from pathlib import Path
 
 import pytest
 
-from common.errors import ParseError
+from common import cache
+from common.errors import FetchError, ParseError, ToolError
 from common.models import NoticeDetail
-from tools.notices import get_notice, parse_notice_detail, parse_notice_list
+from tools import notices as notices_module
+from tools.notices import (
+    get_notice,
+    parse_notice_detail,
+    parse_notice_list,
+    search_notices,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "notices_academic.html"
 DETAIL_FIXTURE = Path(__file__).parent / "fixtures" / "notice_detail.html"
@@ -153,3 +162,166 @@ def test_cached_detail_without_new_fields_still_loads():
     )
     assert detail.source_url == ""
     assert detail.body_images == []
+
+
+# --- ms-01: 첨부 표시·날짜 필터·정렬·고정 글 제외 ---
+
+@pytest.fixture
+def list_env(tmp_path, monkeypatch):
+    """학교 서버 대신 학사 목록 fixture를 돌려주고 캐시는 임시 폴더에 둔다."""
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(notices_module, "fetch", lambda *a, **k: FIXTURE.read_bytes())
+    return tmp_path
+
+
+def test_list_marks_attachment_presence():
+    notices = parse_notice_list(FIXTURE.read_bytes(), menu_idx=169)
+    assert notices[0].has_attachment is True  # 첫 고정 글은 첨부 아이콘이 있다
+    assert notices[1].has_attachment is False  # 두 번째 고정 글은 없다
+
+
+def test_search_default_keeps_board_order_with_pinned_first(list_env):
+    result = search_notices(limit=100)
+    assert result.notices == parse_notice_list(FIXTURE.read_bytes(), menu_idx=169)
+    assert result.notices[0].pinned
+
+
+def test_search_filters_by_posted_date_inclusive(list_env):
+    result = search_notices(since="2026-07-20", until="2026-08-04", limit=100)
+    dates = [n.posted_on for n in result.notices]
+    assert dates
+    assert all("2026-07-20" <= d <= "2026-08-04" for d in dates)
+    assert "2026-07-20" in dates  # 시작일 당일 포함
+    assert "2026-08-04" in dates  # 종료일 당일 포함
+    assert "2026-08-06" not in dates
+
+
+@pytest.mark.parametrize("bad", ["2026/07/20", "2026-7-20", "20260720", "2026-13-01", "어제"])
+def test_search_rejects_malformed_date(list_env, bad):
+    with pytest.raises(ToolError):
+        search_notices(since=bad)
+    with pytest.raises(ToolError):
+        search_notices(until=bad)
+
+
+def test_search_sorts_newest_first_ignoring_pinned(list_env):
+    result = search_notices(sort="newest", limit=100)
+    dates = [n.posted_on for n in result.notices]
+    assert dates == sorted(dates, reverse=True)
+    assert dates[0] == "2026-08-06"  # 고정 글보다 새로운 일반 글이 맨 앞
+
+
+def test_search_sorts_oldest_first(list_env):
+    result = search_notices(sort="oldest", limit=100)
+    dates = [n.posted_on for n in result.notices]
+    assert dates == sorted(dates)
+
+
+def test_search_can_exclude_pinned(list_env):
+    result = search_notices(exclude_pinned=True, limit=100)
+    assert result.notices
+    assert not any(n.pinned for n in result.notices)
+
+
+def test_search_applies_limit_after_filter_and_sort(list_env):
+    result = search_notices(sort="newest", exclude_pinned=True, limit=2)
+    assert [n.posted_on for n in result.notices] == ["2026-08-06", "2026-07-20"]
+
+
+def test_search_filters_cached_list_when_fetch_fails(list_env, monkeypatch):
+    """필터·정렬은 캐시에서 읽은 뒤에도 똑같이 적용된다."""
+    search_notices()  # 캐시 저장
+
+    def fail(*a, **k):
+        raise FetchError("시험")
+
+    monkeypatch.setattr(notices_module, "fetch", fail)
+    result = search_notices(exclude_pinned=True, since="2026-07-01", limit=100)
+    assert result.stale_age_min is not None
+    assert result.notices
+    assert all(not n.pinned and n.posted_on >= "2026-07-01" for n in result.notices)
+
+
+def test_old_cache_without_attachment_field_still_loads(list_env, monkeypatch):
+    old = {
+        "notices": [
+            {
+                "notice_id": "169:BM1:BD1",
+                "title": "옛 캐시 글",
+                "department": "학사지원팀",
+                "posted_on": "2026-08-01",
+                "views": 3,
+                "pinned": False,
+            }
+        ]
+    }
+    (list_env / "notices_academic.json").write_text(
+        json.dumps({"saved_at": time.time(), "data": old}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def fail(*a, **k):
+        raise FetchError("시험")
+
+    monkeypatch.setattr(notices_module, "fetch", fail)
+    result = search_notices(sort="newest")
+    assert result.notices[0].title == "옛 캐시 글"
+    assert result.notices[0].has_attachment is None  # 모름
+
+
+def test_search_rejects_reversed_date_range(list_env):
+    with pytest.raises(ToolError, match="since가 until보다 늦습니다"):
+        search_notices(since="2026-08-04", until="2026-07-20")
+
+
+def test_search_accepts_single_day_range(list_env):
+    result = search_notices(since="2026-08-03", until="2026-08-03", limit=100)
+    assert [n.posted_on for n in result.notices] == ["2026-08-03"] * 3
+
+
+def test_search_validates_arguments_before_fetching(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_fetch(*a, **k):
+        calls.append(k)
+        return FIXTURE.read_bytes()
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(notices_module, "fetch", fake_fetch)
+    with pytest.raises(ToolError):
+        search_notices(since="어제")
+    with pytest.raises(ToolError):
+        search_notices(since="2026-08-04", until="2026-07-20")
+    assert calls == []  # 학교로 요청이 나가지 않는다
+
+
+@pytest.mark.parametrize("sort", ["newest", "oldest"])
+def test_sort_keeps_board_order_among_same_day_notices(list_env, sort):
+    def same_day(result):
+        return [n.title for n in result.notices if n.posted_on == "2026-08-03"]
+
+    board = same_day(search_notices(limit=100))
+    assert len(board) == 3
+    assert same_day(search_notices(sort=sort, limit=100)) == board
+
+
+def test_row_without_attachment_column_is_not_marked():
+    html = (
+        "<table class='board_list'><tr>"
+        "<td class='cell_type01'><a href=\"javascript:fn_view('BM1','BD1','');\">제목</a></td>"
+        "<td>2026-08-01</td><td>3</td>"
+        "</tr></table>"
+    ).encode("utf-8")
+    [notice] = parse_notice_list(html, menu_idx=169)
+    assert notice.has_attachment is False
+
+
+def test_search_sorts_before_applying_limit(list_env):
+    """자르기가 정렬보다 먼저면 게시판 앞 2건(08-04, 08-03)이 나온다."""
+    result = search_notices(sort="oldest", limit=2)
+    assert [n.posted_on for n in result.notices] == ["2022-01-13", "2026-05-28"]
+
+
+def test_search_without_matching_notices_returns_empty_list(list_env):
+    """조건에 맞는 글이 없는 것은 오류가 아니다."""
+    assert search_notices(since="2030-01-01").notices == []

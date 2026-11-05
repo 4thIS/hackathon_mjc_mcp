@@ -111,6 +111,7 @@ def search_notices(
 
     category: general(일반 공지사항), academic(학사), scholarship(장학), job(채용)
     since, until: 작성일 범위(YYYY-MM-DD). 두 날짜 모두 당일을 포함한다.
+                  since가 until보다 늦으면 오류.
     sort: board(게시판 순서 — 상단 고정 글이 먼저, 그다음 일반 글 최신순),
           newest(작성일 최신순), oldest(작성일 오래된순)
     exclude_pinned: true면 상단 고정 글을 뺀다.
@@ -121,6 +122,10 @@ def search_notices(
         raise ParseError(f"알 수 없는 게시판 '{category}'")
     _check_date("since", since)
     _check_date("until", until)
+    if since is not None and until is not None and since > until:
+        raise ToolError(
+            "since가 until보다 늦습니다. 두 날짜의 순서를 바꿔 다시 요청해 주세요."
+        )
     menu_idx, board_name = BOARDS[category]
 
     data, stale_age_min = with_fallback(

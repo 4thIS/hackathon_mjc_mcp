@@ -267,3 +267,50 @@ def test_old_cache_without_attachment_field_still_loads(list_env, monkeypatch):
     result = search_notices(sort="newest")
     assert result.notices[0].title == "옛 캐시 글"
     assert result.notices[0].has_attachment is None  # 모름
+
+
+def test_search_rejects_reversed_date_range(list_env):
+    with pytest.raises(ToolError, match="since가 until보다 늦습니다"):
+        search_notices(since="2026-08-04", until="2026-07-20")
+
+
+def test_search_accepts_single_day_range(list_env):
+    result = search_notices(since="2026-08-03", until="2026-08-03", limit=100)
+    assert [n.posted_on for n in result.notices] == ["2026-08-03"] * 3
+
+
+def test_search_validates_arguments_before_fetching(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_fetch(*a, **k):
+        calls.append(k)
+        return FIXTURE.read_bytes()
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(notices_module, "fetch", fake_fetch)
+    with pytest.raises(ToolError):
+        search_notices(since="어제")
+    with pytest.raises(ToolError):
+        search_notices(since="2026-08-04", until="2026-07-20")
+    assert calls == []  # 학교로 요청이 나가지 않는다
+
+
+@pytest.mark.parametrize("sort", ["newest", "oldest"])
+def test_sort_keeps_board_order_among_same_day_notices(list_env, sort):
+    def same_day(result):
+        return [n.title for n in result.notices if n.posted_on == "2026-08-03"]
+
+    board = same_day(search_notices(limit=100))
+    assert len(board) == 3
+    assert same_day(search_notices(sort=sort, limit=100)) == board
+
+
+def test_row_without_attachment_column_is_not_marked():
+    html = (
+        "<table class='board_list'><tr>"
+        "<td class='cell_type01'><a href=\"javascript:fn_view('BM1','BD1','');\">제목</a></td>"
+        "<td>2026-08-01</td><td>3</td>"
+        "</tr></table>"
+    ).encode("utf-8")
+    [notice] = parse_notice_list(html, menu_idx=169)
+    assert notice.has_attachment is False

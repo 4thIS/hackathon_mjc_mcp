@@ -1,5 +1,3 @@
-import json
-import time
 from pathlib import Path
 
 import pytest
@@ -164,3 +162,32 @@ def test_fetch_failure_without_cache_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(calendar_module, "fetch", fail)
     with pytest.raises(FetchError):
         get_academic_calendar()
+
+
+def test_raises_parse_error_when_event_name_is_blank():
+    html = "<div class='memo'><h4>2026.10.20~2026.10.26</h4><p> &nbsp; </p></div>".encode()
+    with pytest.raises(ParseError):
+        parse_calendar(html)
+
+
+def test_event_name_keeps_spaces_between_inline_tags():
+    html = (
+        "<div class='memo'><h4>2026.10.20~2026.10.26</h4>"
+        "<p>2학기 <b>중간</b> 고사</p></div>"
+    ).encode()
+    [event] = parse_calendar(html)
+    assert event.name == "2학기 중간 고사"
+
+
+@pytest.mark.parametrize(
+    "period",
+    [
+        "2026.13.45~2026.99.99",  # 없는 달·일
+        "2026.02.30~2026.03.01",  # 없는 날짜
+        "2026.10.26~2026.10.20",  # 시작이 종료보다 늦음
+    ],
+)
+def test_raises_parse_error_when_period_is_not_a_real_range(period):
+    html = f"<div class='memo'><h4>{period}</h4><p>일정</p></div>".encode()
+    with pytest.raises(ParseError):
+        parse_calendar(html)

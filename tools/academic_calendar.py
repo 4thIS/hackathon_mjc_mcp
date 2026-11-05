@@ -35,11 +35,18 @@ def parse_calendar(content: bytes) -> list[CalendarEvent]:
             if match is None or name_element is None or name_element.name != "p":
                 raise ParseError("학사일정")
             y1, m1, d1, y2, m2, d2 = match.groups()
-            event = CalendarEvent(
-                name=name_element.get_text(strip=True),
-                start=f"{y1}-{m1}-{d1}",
-                end=f"{y2}-{m2}-{d2}",
-            )
+            name = " ".join(name_element.get_text().split())
+            start, end = f"{y1}-{m1}-{d1}", f"{y2}-{m2}-{d2}"
+            try:
+                datetime.strptime(start, "%Y-%m-%d")
+                datetime.strptime(end, "%Y-%m-%d")
+            except ValueError:
+                raise ParseError("학사일정") from None
+            # 빈 이름, 달력에 없는 날짜, 시작이 종료보다 늦은 기간은 페이지가
+            # 예상과 다르다는 뜻이다. 그대로 내보내면 기간 필터가 어긋난다.
+            if not name or start > end:
+                raise ParseError("학사일정")
+            event = CalendarEvent(name=name, start=start, end=end)
             # 여러 달에 걸친 일정은 달마다 되풀이되므로 한 번만 낸다.
             key = (event.name, event.start, event.end)
             if key not in seen:

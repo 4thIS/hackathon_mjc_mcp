@@ -46,7 +46,13 @@ def test_raises_parse_error_when_no_events():
 
 
 def test_raises_parse_error_when_date_is_malformed():
-    html = "<div class='memo'><h4>곧 공지 예정</h4><p>무언가</p></div>".encode()
+    """정상 일정이 함께 있어도, 기간 형식이 다른 일정을 조용히 건너뛰지 않는다."""
+    html = (
+        "<div class='memo'>"
+        "<h4>2026.09.01~2026.09.01</h4><p>개강일</p>"
+        "<h4>곧 공지 예정</h4><p>무언가</p>"
+        "</div>"
+    ).encode()
     with pytest.raises(ParseError):
         parse_calendar(html)
 

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.parse import urlencode, urljoin
 
+from bs4 import Comment, NavigableString, Tag
 from mcp.types import ToolAnnotations
 
 from common.cache import with_fallback
@@ -39,6 +40,18 @@ NoticeCategory = Literal["general", "academic", "scholarship", "job"]
 NoticeSort = Literal["board", "newest", "oldest"]
 
 _FN_VIEW = re.compile(r"fn_view\('(BM\d+)','(BD\d+)'")
+
+# 이 태그의 앞뒤에서만 줄을 바꾼다. 나머지(span, b, font, a 등)는 글자를 이어 붙인다.
+_BLOCK_TAGS = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "center", "dd", "details",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav",
+        "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
+        "th", "thead", "ul",
+    }
+)
+_SKIP_TAGS = frozenset({"script", "style"})
 
 
 def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
@@ -77,6 +90,125 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
         )
 
     return notices
+
+
+def _span(cell: Tag, name: str, limit: int) -> int:
+    """칸의 rowspan·colspan 값. 숫자가 아니거나 1보다 작으면 1로 본다."""
+    try:
+        value = int(cell.get(name, "1"))
+    except (TypeError, ValueError):
+        return 1
+    return min(max(value, 1), limit)
+
+
+def _flatten_lines(element: Tag) -> list[str]:
+    """본문을 줄 목록으로 만든다.
+
+    편집기가 글자를 span 조각으로 잘게 나눠 저장하므로, 블록 경계와 <br>에서만
+    줄을 바꾸고 원문의 공백·줄바꿈은 공백 하나로 접는다. 표는 행 하나를
+    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다. 합쳐진 칸(rowspan·colspan)은
+    걸친 행·열마다 다시 채워 행마다 열 위치가 머리 행과 같게 한다. 칸이 하나뿐인
+    행은 칸 안의 줄을 그대로 둔다.
+    """
+    lines: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        line = " ".join("".join(buffer).split())
+        buffer.clear()
+        if line:
+            lines.append(line)
+
+    def add_row(row: Tag, carried: dict[int, tuple[int, list[str]]]) -> None:
+        # carried: 열 번호 -> (아직 채울 행 수, 위 행에서 rowspan으로 내려온 칸의 줄)
+        cells: list[list[str]] = []
+        own = 0  # 이 행에 직접 적힌 칸 수
+        from_above = 0  # 위 행에서 내려와 이 행을 채운 칸 수
+
+        def consume(index: int) -> list[str]:
+            """내려온 칸을 이 행에서 쓰고, 남은 행 수를 하나 줄인다."""
+            left, text = carried.pop(index)
+            if left > 1:
+                carried[index] = (left - 1, text)
+            return text
+
+        for cell in row.find_all(["td", "th"], recursive=False):
+            while len(cells) in carried:
+                cells.append(consume(len(cells)))
+                from_above += 1
+            own += 1
+            text = _flatten_lines(cell)
+            rowspan = _span(cell, "rowspan", 65534)
+            for _ in range(_span(cell, "colspan", 1000)):
+                index = len(cells)
+                if index in carried:
+                    # 이 행의 칸이 내려오던 칸을 덮었다. 덮인 쪽을 여기서 끝내지 않으면
+                    # 다음 행에 한 박자 늦게 끼어들어 열이 밀린다.
+                    consume(index)
+                if rowspan > 1:
+                    carried[index] = (rowspan - 1, text)
+                cells.append(text)
+        while carried and max(carried) >= len(cells):
+            index = len(cells)
+            if index in carried:
+                cells.append(consume(index))
+                from_above += 1
+            else:
+                cells.append([])
+
+        if own == 1 and from_above == 0:
+            # 이 행에 적힌 칸이 하나뿐이고 내려온 칸도 없으면 표가 아니라 테두리 상자다.
+            # 칸 안의 줄을 그대로 두고, 전폭 칸(colspan)이라고 글을 반복하지 않는다.
+            lines.extend(cells[0])
+        elif any(cells):
+            lines.append(" | ".join(" ".join(cell) for cell in cells))
+
+    def walk_table(table: Tag) -> None:
+        # rowspan은 같은 표 안에서만 이어진다. 다음 표로 넘어가지 않게 표마다 새로 센다.
+        carried: dict[int, tuple[int, list[str]]] = {}
+        for child in table.children:
+            if isinstance(child, Tag) and child.name in ("thead", "tbody", "tfoot"):
+                for part in child.children:
+                    if isinstance(part, Tag) and part.name == "tr":
+                        add_row(part, carried)
+                    else:
+                        walk(part)
+                        flush()
+            elif isinstance(child, Tag) and child.name == "tr":
+                add_row(child, carried)
+            else:
+                walk(child)
+                flush()
+
+    def walk(node) -> None:
+        if isinstance(node, Comment):
+            return
+        if isinstance(node, NavigableString):
+            buffer.append(str(node))
+            return
+        if not isinstance(node, Tag) or node.name in _SKIP_TAGS:
+            return
+        if node.name == "br":
+            flush()
+        elif node.name == "table":
+            flush()
+            walk_table(node)
+        elif node.name == "tr":
+            flush()
+            add_row(node, {})
+        elif node.name in _BLOCK_TAGS:
+            flush()
+            for child in node.children:
+                walk(child)
+            flush()
+        else:
+            for child in node.children:
+                walk(child)
+
+    for child in element.children:
+        walk(child)
+    flush()
+    return lines
 
 
 def _fetch_list(menu_idx: int) -> dict:
@@ -171,7 +303,12 @@ def parse_notice_detail(content: bytes, source_url: str) -> NoticeDetail:
             info[header.get_text(strip=True)] = cell.get_text(strip=True)
 
     memo = view.select_one("#divMemo")
-    body = memo.get_text("\n", strip=True) if memo is not None else ""
+    try:
+        body = "\n".join(_flatten_lines(memo)) if memo is not None else ""
+    except RecursionError:
+        # 태그가 재귀 한도를 넘게 겹친 본문. ToolError 경계 안에 머물러야
+        # get_notice의 캐시 폴백이 동작한다.
+        raise ParseError("공지 본문") from None
     truncated = len(body) > MAX_BODY_CHARS
     body = body[:MAX_BODY_CHARS] if body else _IMAGE_ONLY_BODY
 

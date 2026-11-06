@@ -436,3 +436,101 @@ def test_single_cell_row_keeps_its_lines():
 )
 def test_other_block_tags_also_break_lines(tag):
     assert _body(f"<{tag}>제목</{tag}><{tag}>부제</{tag}>") == "제목\n부제"
+
+
+# --- ms-04: 병합 칸(rowspan·colspan) 풀기 ---
+
+MERGED_FIXTURE = Path(__file__).parent / "fixtures" / "notice_detail_merged_cells.html"
+MERGED_URL = (
+    "https://www.mjc.ac.kr/bbs/data/view.do"
+    "?menu_idx=208&bbs_mst_idx=BM0000000032&data_idx=BD0000001001"
+)
+
+
+def _merged_table() -> list[list[str]]:
+    """장학종별 표의 각 줄을 칸 목록으로 돌려준다."""
+    body = parse_notice_detail(MERGED_FIXTURE.read_bytes(), MERGED_URL).body
+    return [line.split(" | ") for line in body.split("\n") if " | " in line]
+
+
+def _merged_row(first_cell: str) -> list[str]:
+    [row] = [cells for cells in _merged_table() if cells[0] == first_cell]
+    return row
+
+
+def test_real_merged_cells_fill_rows_below():
+    """대상·신청기간이 위 행에서 rowspan으로 걸쳐 있어도 어학우수 장학 줄에 들어간다."""
+    row = _merged_row("어학우수 장학")
+    assert row[3] == "재학생 (본과정) ※ 복학생 포함"
+    assert row[4].startswith("1차 신청: 9/1~9/30")
+    assert row[5:] == ["학과장", "정액 30만원"]
+
+
+def test_real_merged_cells_keep_column_positions():
+    """명지우수장학 줄의 네 번째 칸은 학과장이 아니라 대상이다."""
+    row = _merged_row("명지우수장학")
+    assert row[3] == "재학생 (본과정) ※ 복학생 포함"
+    assert row[4].startswith("학기 중 접수")
+    assert row[5] == "학과장"
+
+
+def test_real_merged_table_rows_all_have_header_width():
+    table = _merged_table()
+    assert table[0][:4] == ["장학종별", "신청기준", "제출서류", "대상"]
+    assert len(table) == 10
+    assert all(len(cells) == 7 for cells in table)
+    # 교직원장학 이름 칸은 세 행에 걸쳐 있다. 세 행 모두 이름과 대상이 채워진다.
+    staff = [cells for cells in table if cells[0].startswith("교직원장학")]
+    assert [cells[6] for cells in staff] == ["등록금의 100% 범위내", "수업료의 50% 범위내", "등록금의 50% 범위내"]
+    assert len({cells[3] for cells in staff}) == 1
+
+
+def test_rowspan_cell_repeats_in_rows_below():
+    body = _body(
+        "<table>"
+        "<tr><th>구분</th><th>기간</th><th>금액</th></tr>"
+        "<tr><td rowspan='2'>1학기</td><td>3월</td><td>100</td></tr>"
+        "<tr><td>4월</td><td>200</td></tr>"
+        "</table>"
+    )
+    assert body == "구분 | 기간 | 금액\n1학기 | 3월 | 100\n1학기 | 4월 | 200"
+
+
+def test_colspan_cell_repeats_across_columns():
+    body = _body(
+        "<table>"
+        "<tr><th colspan='2'>신청</th><th>비고</th></tr>"
+        "<tr><td>시작</td><td>끝</td><td>없음</td></tr>"
+        "</table>"
+    )
+    assert body == "신청 | 신청 | 비고\n시작 | 끝 | 없음"
+
+
+def test_row_left_with_one_cell_by_rowspan_stays_one_line():
+    """rowspan 때문에 칸이 하나만 남은 행은 상자가 아니라 표의 한 행이다."""
+    body = _body(
+        "<table>"
+        "<tr><td rowspan='2'>1학년</td><td>기간: 9.1.<br>장소: 본관</td></tr>"
+        "<tr><td>기간: 9.2.<br>장소: 별관</td></tr>"
+        "</table>"
+    )
+    assert body == "1학년 | 기간: 9.1. 장소: 본관\n1학년 | 기간: 9.2. 장소: 별관"
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-3", ""])
+def test_invalid_span_values_count_as_one(value):
+    body = _body(
+        "<table>"
+        f"<tr><td rowspan='{value}' colspan='{value}'>가</td><td>나</td></tr>"
+        "<tr><td>다</td><td>라</td></tr>"
+        "</table>"
+    )
+    assert body == "가 | 나\n다 | 라"
+
+
+def test_rowspan_does_not_leak_into_next_table():
+    body = _body(
+        "<table><tr><td rowspan='5'>위</td><td>값</td></tr></table>"
+        "<table><tr><td>아래</td><td>표</td></tr></table>"
+    )
+    assert body == "위 | 값\n아래 | 표"

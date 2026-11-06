@@ -92,13 +92,23 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
     return notices
 
 
+def _span(cell: Tag, name: str, limit: int) -> int:
+    """칸의 rowspan·colspan 값. 숫자가 아니거나 1보다 작으면 1로 본다."""
+    try:
+        value = int(cell.get(name, "1"))
+    except (TypeError, ValueError):
+        return 1
+    return min(max(value, 1), limit)
+
+
 def _flatten_lines(element: Tag) -> list[str]:
     """본문을 줄 목록으로 만든다.
 
     편집기가 글자를 span 조각으로 잘게 나눠 저장하므로, 블록 경계와 <br>에서만
     줄을 바꾸고 원문의 공백·줄바꿈은 공백 하나로 접는다. 표는 행 하나를
-    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다. 칸이 하나뿐인 행은
-    칸 안의 줄을 그대로 둔다.
+    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다. 합쳐진 칸(rowspan·colspan)은
+    걸친 행·열마다 다시 채워 행마다 열 위치가 머리 행과 같게 한다. 칸이 하나뿐인
+    행은 칸 안의 줄을 그대로 둔다.
     """
     lines: list[str] = []
     buffer: list[str] = []
@@ -108,6 +118,54 @@ def _flatten_lines(element: Tag) -> list[str]:
         buffer.clear()
         if line:
             lines.append(line)
+
+    def add_row(row: Tag, carried: dict[int, tuple[int, list[str]]]) -> None:
+        # carried: 열 번호 -> (아직 채울 행 수, 위 행에서 rowspan으로 내려온 칸의 줄)
+        cells: list[list[str]] = []
+
+        def take_carried() -> None:
+            left, text = carried.pop(len(cells))
+            if left > 1:
+                carried[len(cells)] = (left - 1, text)
+            cells.append(text)
+
+        for cell in row.find_all(["td", "th"], recursive=False):
+            while len(cells) in carried:
+                take_carried()
+            text = _flatten_lines(cell)
+            rowspan = _span(cell, "rowspan", 65534)
+            for _ in range(_span(cell, "colspan", 1000)):
+                if rowspan > 1:
+                    carried[len(cells)] = (rowspan - 1, text)
+                cells.append(text)
+        while carried and max(carried) >= len(cells):
+            if len(cells) in carried:
+                take_carried()
+            else:
+                cells.append([])
+
+        if len(cells) == 1:
+            # 칸이 하나뿐인 행은 표가 아니라 테두리 상자다. 칸 안의 줄을 그대로 둔다.
+            lines.extend(cells[0])
+        elif any(cells):
+            lines.append(" | ".join(" ".join(cell) for cell in cells))
+
+    def walk_table(table: Tag) -> None:
+        # rowspan은 같은 표 안에서만 이어진다. 다음 표로 넘어가지 않게 표마다 새로 센다.
+        carried: dict[int, tuple[int, list[str]]] = {}
+        for child in table.children:
+            if isinstance(child, Tag) and child.name in ("thead", "tbody", "tfoot"):
+                for part in child.children:
+                    if isinstance(part, Tag) and part.name == "tr":
+                        add_row(part, carried)
+                    else:
+                        walk(part)
+                        flush()
+            elif isinstance(child, Tag) and child.name == "tr":
+                add_row(child, carried)
+            else:
+                walk(child)
+                flush()
 
     def walk(node) -> None:
         if isinstance(node, Comment):
@@ -119,17 +177,12 @@ def _flatten_lines(element: Tag) -> list[str]:
             return
         if node.name == "br":
             flush()
+        elif node.name == "table":
+            flush()
+            walk_table(node)
         elif node.name == "tr":
             flush()
-            cells = [
-                _flatten_lines(cell)
-                for cell in node.find_all(["td", "th"], recursive=False)
-            ]
-            if len(cells) == 1:
-                # 칸이 하나뿐인 행은 표가 아니라 테두리 상자다. 칸 안의 줄을 그대로 둔다.
-                lines.extend(cells[0])
-            elif any(cells):
-                lines.append(" | ".join(" ".join(cell) for cell in cells))
+            add_row(node, {})
         elif node.name in _BLOCK_TAGS:
             flush()
             for child in node.children:

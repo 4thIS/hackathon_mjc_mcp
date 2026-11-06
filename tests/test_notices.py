@@ -534,3 +534,47 @@ def test_rowspan_does_not_leak_into_next_table():
         "<table><tr><td>아래</td><td>표</td></tr></table>"
     )
     assert body == "위 | 값\n아래 | 표"
+
+
+def test_colspan_row_consumes_overlapped_rowspan():
+    """전폭 행이 세로 병합된 열을 덮으면, 그 값이 아래 행에 끼어들지 않는다."""
+    body = _body(
+        "<table>"
+        "<tr><td>A1</td><td rowspan='2'>B</td><td>C1</td></tr>"
+        "<tr><td colspan='3'>전폭 안내</td></tr>"
+        "<tr><td>A3</td><td>B3</td><td>C3</td></tr>"
+        "</table>"
+    )
+    assert body == "A1 | B | C1\n전폭 안내\nA3 | B3 | C3"
+
+
+@pytest.mark.parametrize("span", ["colspan='3'", "rowspan='2' colspan='2'"])
+def test_colspan_box_row_keeps_its_lines(span):
+    """표 전체 폭을 차지하는 한 칸도 테두리 상자다. 글을 열 수만큼 반복하지 않는다."""
+    body = _body(
+        f"<table><tr><td {span}>"
+        "<p>1. 신청기간: 9.1.~9.5.</p><p>2. 방법: 온라인</p>"
+        "</td></tr></table>"
+    )
+    assert body == "1. 신청기간: 9.1.~9.5.\n2. 방법: 온라인"
+
+
+def test_rowspan_and_colspan_on_one_cell_fill_both():
+    body = _body(
+        "<table>"
+        "<tr><td rowspan='2' colspan='2'>AB</td><td>C</td></tr>"
+        "<tr><td>c2</td></tr>"
+        "</table>"
+    )
+    assert body == "AB | AB | C\nAB | AB | c2"
+
+
+def test_rowspan_in_last_column_fills_next_row():
+    body = _body(
+        "<table>"
+        "<tr><th>구분</th><th>기간</th><th>비고</th></tr>"
+        "<tr><td>1차</td><td>9월</td><td rowspan='2'>공통</td></tr>"
+        "<tr><td>2차</td><td>10월</td></tr>"
+        "</table>"
+    )
+    assert body == "구분 | 기간 | 비고\n1차 | 9월 | 공통\n2차 | 10월 | 공통"

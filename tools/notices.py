@@ -122,30 +122,43 @@ def _flatten_lines(element: Tag) -> list[str]:
     def add_row(row: Tag, carried: dict[int, tuple[int, list[str]]]) -> None:
         # carried: 열 번호 -> (아직 채울 행 수, 위 행에서 rowspan으로 내려온 칸의 줄)
         cells: list[list[str]] = []
+        own = 0  # 이 행에 직접 적힌 칸 수
+        from_above = 0  # 위 행에서 내려와 이 행을 채운 칸 수
 
-        def take_carried() -> None:
-            left, text = carried.pop(len(cells))
+        def consume(index: int) -> list[str]:
+            """내려온 칸을 이 행에서 쓰고, 남은 행 수를 하나 줄인다."""
+            left, text = carried.pop(index)
             if left > 1:
-                carried[len(cells)] = (left - 1, text)
-            cells.append(text)
+                carried[index] = (left - 1, text)
+            return text
 
         for cell in row.find_all(["td", "th"], recursive=False):
             while len(cells) in carried:
-                take_carried()
+                cells.append(consume(len(cells)))
+                from_above += 1
+            own += 1
             text = _flatten_lines(cell)
             rowspan = _span(cell, "rowspan", 65534)
             for _ in range(_span(cell, "colspan", 1000)):
+                index = len(cells)
+                if index in carried:
+                    # 이 행의 칸이 내려오던 칸을 덮었다. 덮인 쪽을 여기서 끝내지 않으면
+                    # 다음 행에 한 박자 늦게 끼어들어 열이 밀린다.
+                    consume(index)
                 if rowspan > 1:
-                    carried[len(cells)] = (rowspan - 1, text)
+                    carried[index] = (rowspan - 1, text)
                 cells.append(text)
         while carried and max(carried) >= len(cells):
-            if len(cells) in carried:
-                take_carried()
+            index = len(cells)
+            if index in carried:
+                cells.append(consume(index))
+                from_above += 1
             else:
                 cells.append([])
 
-        if len(cells) == 1:
-            # 칸이 하나뿐인 행은 표가 아니라 테두리 상자다. 칸 안의 줄을 그대로 둔다.
+        if own == 1 and from_above == 0:
+            # 이 행에 적힌 칸이 하나뿐이고 내려온 칸도 없으면 표가 아니라 테두리 상자다.
+            # 칸 안의 줄을 그대로 두고, 전폭 칸(colspan)이라고 글을 반복하지 않는다.
             lines.extend(cells[0])
         elif any(cells):
             lines.append(" | ".join(" ".join(cell) for cell in cells))

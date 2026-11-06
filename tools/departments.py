@@ -5,6 +5,15 @@
 이 덕분에 이 툴은 로그인이 필요 없다 — search_courses만 인증이 필요하다.
 
 매 학기 개편이 있으면 이 표를 갱신해야 한다는 뜻이기도 하다.
+
+학기마다 표를 갱신하는 절차:
+1. 학기가 바뀌면 본인 계정으로 sugang에 로그인해 학과 선택 목록에 있는 코드와
+   학과명을 모두 확인한다. 이 코드는 강좌 검색 요청(lectList)의 pComboClsMajCd 값이다.
+   로그인 직후 기본으로 선택된 값(1201001 = 교양)을 특정 학과로 착각하지 않는다.
+2. DEPARTMENTS와 비교해 신설·폐지·이름 변경만 반영한다. 그대로인 학과의 코드는
+   바꾸지 않는다(학과 코드를 받는 도구가 이 값을 그대로 쓴다).
+3. 위 확보 날짜를 새로 확인한 날짜로 고치고, 전체 테스트를 돌린다.
+세션 쿠키·비밀번호는 코드·테스트·로그·PR에 남기지 않는다.
 """
 
 from mcp.types import ToolAnnotations
@@ -52,9 +61,10 @@ DEPARTMENTS: dict[str, str] = {
 
 
 def list_departments() -> DepartmentList:
-    """sugang에 등록된 학과 목록을 조회한다. 로그인이 필요 없다.
+    """명지전문대 학과 목록(학과명과 학과 코드)을 조회한다. 로그인이 필요 없다.
 
-    반환된 각 항목의 code를 search_courses의 department_code에 그대로 넘긴다.
+    사용자가 말한 학과의 정식 이름을 확인할 때 쓴다. 학과 코드를 인자로 받는
+    도구가 있으면 반환된 code를 그대로 넘긴다.
     """
     return DepartmentList(
         departments=[Department(code=c, name=n) for c, n in DEPARTMENTS.items()]

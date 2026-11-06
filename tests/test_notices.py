@@ -325,3 +325,138 @@ def test_search_sorts_before_applying_limit(list_env):
 def test_search_without_matching_notices_returns_empty_list(list_env):
     """조건에 맞는 글이 없는 것은 오류가 아니다."""
     assert search_notices(since="2030-01-01").notices == []
+
+
+# --- ms-02: 제목 키워드·다음 쪽·limit 상한 ---
+
+P2_FIXTURE = Path(__file__).parent / "fixtures" / "notices_academic_p2.html"
+
+# 마지막 쪽 너머를 요청하면 학교는 빈 표가 아니라 상단 고정 글만 돌려준다
+# (학사공지 pageIndex=9999, 2026-11-06 실측: 고정 5건, 일반 0건).
+# 그 구조만 남긴 최소 재현본이다.
+_PINNED_ONLY_PAGE = (
+    "<table class='board_list'><tr class='cell_notice'>"
+    "<td><img alt='공지'></td>"
+    "<td class='cell_type01'><a href=\"javascript:fn_view('BM1','BD1','');\">고정 글</a></td>"
+    "<td></td><td>학사지원팀</td><td>2026-10-26</td><td>7</td>"
+    "</tr></table>"
+).encode("utf-8")
+
+
+@pytest.fixture
+def paged_env(tmp_path, monkeypatch):
+    """쪽 번호에 맞는 응답을 돌려주고, 보낸 요청 인자를 기록한다."""
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    calls: list[dict] = []
+
+    def fake_fetch(url, *, params=None, headers=None):
+        calls.append(dict(params or {}))
+        page = (params or {}).get("pageIndex")
+        if page == "999":
+            return _PINNED_ONLY_PAGE
+        return (P2_FIXTURE if page == "2" else FIXTURE).read_bytes()
+
+    monkeypatch.setattr(notices_module, "fetch", fake_fetch)
+    return calls
+
+
+def test_first_page_request_is_unchanged(paged_env):
+    search_notices()
+    assert paged_env == [{"menu_idx": "169"}]
+
+
+def test_next_page_sends_page_index(paged_env):
+    search_notices(page=2)
+    assert paged_env == [{"menu_idx": "169", "pageIndex": "2"}]
+
+
+def test_second_page_fixture_repeats_pinned_notices():
+    """전제 고정: 학교는 2쪽에도 고정 글을 다시 내려 준다."""
+    assert any(n.pinned for n in parse_notice_list(P2_FIXTURE.read_bytes(), 169))
+
+
+def test_next_page_drops_repeated_pinned_notices(paged_env):
+    result = search_notices(page=2, limit=50)
+    assert result.notices
+    assert not any(n.pinned for n in result.notices)
+    assert [n.posted_on for n in result.notices][:2] == ["2026-08-12", "2026-08-10"]
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_page_must_be_positive(paged_env, bad):
+    with pytest.raises(ToolError, match="page"):
+        search_notices(page=bad)
+    assert paged_env == []  # 학교로 요청이 나가지 않는다
+
+
+def test_page_beyond_last_returns_empty_list(paged_env):
+    """마지막 쪽 너머는 고정 글만 오고, 그 고정 글은 2쪽부터 빠지므로 빈 목록이 된다."""
+    assert search_notices(page=999).notices == []
+
+
+def test_keyword_filters_by_title(paged_env):
+    titles = [n.title for n in search_notices(keyword="등록금", limit=50).notices]
+    assert titles == [
+        "2026학년도 2학기 재학생 등록금 분할납부 관련 안내",
+        "2026학년도 2학기 등록금 납부일정 안내",
+    ]
+
+
+def test_keyword_ignores_case_and_surrounding_spaces(paged_env):
+    titles = [n.title for n in search_notices(keyword="  k-mooc ", limit=50).notices]
+    assert titles == ["2026학년도 제1학기 K-MOOC 학점인정 신청 안내"]
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_keyword_means_no_filter(paged_env, blank):
+    assert search_notices(keyword=blank, limit=50).notices == search_notices(limit=50).notices
+
+
+def test_keyword_applies_before_limit(paged_env):
+    result = search_notices(keyword="등록금", limit=1)
+    assert [n.title for n in result.notices] == [
+        "2026학년도 2학기 재학생 등록금 분할납부 관련 안내"
+    ]
+
+
+def test_keyword_filters_within_the_requested_page_only(paged_env):
+    """같은 키워드라도 조회한 쪽 안에서만 거른다."""
+    assert len(search_notices(keyword="등록금", limit=50).notices) == 2
+    assert len(search_notices(page=2, keyword="등록금", limit=50).notices) == 2
+
+
+def test_limit_is_capped(paged_env, monkeypatch):
+    assert notices_module.MAX_LIMIT == 50
+    monkeypatch.setattr(notices_module, "MAX_LIMIT", 3)
+    assert len(search_notices(limit=10_000).notices) == 3
+
+
+def test_next_page_does_not_fall_back_to_first_page_cache(paged_env, monkeypatch):
+    """2쪽 조회가 실패했을 때 1쪽 캐시를 2쪽인 것처럼 돌려주면 안 된다."""
+    search_notices()  # 1쪽만 캐시됨
+
+    def fail(*a, **k):
+        raise FetchError("시험")
+
+    monkeypatch.setattr(notices_module, "fetch", fail)
+    with pytest.raises(FetchError):
+        search_notices(page=2)
+    assert search_notices().stale_age_min is not None  # 1쪽은 자기 캐시로 답한다
+
+
+def test_next_page_falls_back_to_its_own_cache(paged_env, monkeypatch):
+    fresh = search_notices(page=2, limit=50)
+
+    def fail(*a, **k):
+        raise FetchError("시험")
+
+    monkeypatch.setattr(notices_module, "fetch", fail)
+    stale = search_notices(page=2, limit=50)
+    assert stale.stale_age_min is not None
+    assert stale.notices == fresh.notices
+
+
+def test_old_first_page_cache_is_still_read(paged_env, monkeypatch):
+    """1쪽 캐시 키는 그대로다. ms-02 이전에 저장된 캐시가 그대로 읽힌다."""
+    search_notices()
+    assert (paged_env and (Path(str(cache.CACHE_DIR)) / "notices_academic.json").exists())

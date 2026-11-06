@@ -226,3 +226,9 @@ docs/design.md   설계 문서
 | [@mnzsuu](https://github.com/mnzsuu) | 공지 게시판 툴 · 강좌 검색 툴 |
 
 2026년 명지전문대 캡스톤 경진대회 출품작.
+
+---
+
+## 라이선스
+
+[MIT](LICENSE)

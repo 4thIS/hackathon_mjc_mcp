@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hackathon-mjc-mcp"
+version = "0.1.0"
+description = "명지전문대 MCP 도구(공지·도서관 좌석·학과 등)와 공통 레이어"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+# requirements.txt와 같은 버전으로 고정한다. 이 리포를 커밋 단위로 고정해 쓰는 쪽과 버전이 갈리지 않게 한다.
+dependencies = [
+    "beautifulsoup4==4.15.0",
+    "httpx==0.28.1",
+    "lxml==6.1.1",
+    "mcp==2.0.0",
+    "pydantic==2.13.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[tool.setuptools]
+# 서버 진입점(server.py)과 로그인 도우미(auth/)는 로컬 실행용이라 패키지에 넣지 않는다.
+packages = ["common", "tools"]

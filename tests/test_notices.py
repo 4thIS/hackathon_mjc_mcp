@@ -420,9 +420,25 @@ def test_keyword_applies_before_limit(paged_env):
 
 
 def test_keyword_filters_within_the_requested_page_only(paged_env):
-    """같은 키워드라도 조회한 쪽 안에서만 거른다."""
-    assert len(search_notices(keyword="등록금", limit=50).notices) == 2
-    assert len(search_notices(page=2, keyword="등록금", limit=50).notices) == 2
+    """키워드는 조회한 쪽 안에서만 거른다. 다른 쪽에 있는 글은 찾지 않는다."""
+    # 1쪽에만 있는 글
+    assert [n.title for n in search_notices(keyword="휴학", limit=50).notices] == [
+        "[휴학 / 복학] 2026학년도 2학기 휴학 및 복학 신청 안내"
+    ]
+    assert search_notices(page=2, keyword="휴학", limit=50).notices == []
+    # 2쪽에만 있는 글
+    assert search_notices(keyword="폐강", limit=50).notices == []
+    assert [n.title for n in search_notices(page=2, keyword="폐강", limit=50).notices] == [
+        "[교양과정] 생활영어 교과목 폐강 및 대체 교과목 안내"
+    ]
+
+
+def test_keyword_matches_the_title_only(paged_env):
+    """부서명·날짜가 아니라 제목만 본다."""
+    notices = search_notices(limit=50).notices
+    assert sum(1 for n in notices if "학사지원팀" in n.department) > 0
+    assert search_notices(keyword="학사지원팀", limit=50).notices == []
+    assert search_notices(keyword="2026-08-04", limit=50).notices == []
 
 
 def test_limit_is_capped(paged_env, monkeypatch):

@@ -115,7 +115,7 @@ AI 클라이언트 설정(`.mcp.json` 등)에 아래를 추가하고 클라이�
 | 툴 | 하는 일 | 주요 인자 | 데이터 출처 |
 |---|---|---|---|
 | `get_library_seats` | 열람실 3곳(집중학습공간·개방형학습공간·미디어실) 실시간 좌석 현황 | 없음 | 도서관 좌석 시스템 |
-| `search_notices` | 공지 게시판 최신 글 목록 | `category`: `general`·`academic`·`scholarship`·`job` / `limit` | www.mjc.ac.kr 게시판 |
+| `search_notices` | 공지 게시판의 글 목록(한 쪽씩) | `category`: `general`·`academic`·`scholarship`·`job` / `page` / `limit`(최대 50) / `since`·`until` / `keyword` / `sort` / `exclude_pinned` | www.mjc.ac.kr 게시판 |
 | `get_notice` | 공지 한 건의 본문, 첨부파일 목록, 본문 이미지 링크, 원문 페이지 주소 | `notice_id` (목록이 돌려준 값 그대로) | www.mjc.ac.kr 게시판 |
 | `list_departments` | 학과 목록(이름·코드). 로그인 불필요 | 없음 | sugang(정적 매핑) |
 | `search_courses` | 개설 강좌 검색. **로그인 필요** — 아래 참고 | `department_code`(목록이 돌려준 값), `course_type`, `grade`, `keyword` | sugang 수강신청 시스템 |
@@ -170,8 +170,18 @@ AI 클라이언트 설정(`.mcp.json` 등)에 아래를 추가하고 클라이�
 
 ## 한계 (정직하게)
 
-- **게시판 페이지네이션을 지원하지 않습니다.** 각 게시판의 첫 페이지 범위 안에서만
-  조회됩니다. 오래된 공지는 찾지 못합니다.
+- **한 번에 한 쪽씩 조회합니다.** `search_notices`의 `page`(1부터)로 다음 쪽을 봅니다.
+  올릴수록 오래된 글입니다. 상단 고정 글은 쪽마다 되풀이되므로 2쪽 이상에서는 결과에서
+  빠지고, 필터(`keyword`·`since`·`until`·`exclude_pinned`) 없이 조회했을 때 빈 목록이
+  오면 마지막 쪽을 넘긴 것입니다.
+- **날짜 필터와 제목 키워드(`keyword`)는 조회한 쪽 안에서만 거릅니다.** 게시판 전체를
+  검색하지 않으므로, 결과를 그 조건에 맞는 전체 공지로 단정하면 안 됩니다. 이때의
+  빈 목록은 그 쪽에 맞는 글이 없다는 뜻일 뿐입니다.
+- **`limit`은 그 쪽의 결과를 자르며, 잘렸다는 표시가 응답에 없습니다**(최대 50건).
+  기본 순서에서는 고정 글이 먼저 오므로, 고정 글이 많은 게시판에서는 기본값 10이
+  일반 글을 하나도 남기지 않을 수 있습니다. 최근 글은 `sort=newest`나
+  `exclude_pinned=true`로 보고, 한 쪽을 모두 모으려면 `limit`을 50까지 올린 뒤
+  `page`를 넘기세요.
 - **본문이 이미지로 작성된 공지는 텍스트를 추출할 수 없습니다.** 이 경우 그 사실을
   명시하는 안내 문구와 함께 본문 이미지 링크(`body_images`), 원문 페이지 주소
   (`source_url`), 첨부파일 목록을 돌려줍니다. 없는 내용을 지어내지 않고 사람이

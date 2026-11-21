@@ -9,6 +9,7 @@
 
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -16,7 +17,9 @@ from typing import Callable
 
 from common.errors import ToolError
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
+# 캐시 위치. 환경 변수 MJC_CACHE_DIR로 바꿀 수 있고, 없거나 비어 있으면 코드 폴더 상위의 .cache다.
+# 패키지로 설치하면 기본 위치가 설치 폴더 안이 되므로, 원격 서버 같은 설치 환경에서는 이 변수를 준다.
+CACHE_DIR = Path(os.environ.get("MJC_CACHE_DIR") or Path(__file__).resolve().parent.parent / ".cache")
 
 # stdout은 MCP stdio transport의 JSON-RPC 채널이므로 로그는 stderr로만 내보낸다.
 _logger = logging.getLogger(__name__)

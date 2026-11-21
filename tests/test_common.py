@@ -4,7 +4,9 @@ import threading
 import httpx
 import pytest
 
-from common import http
+from pathlib import Path
+
+from common import cache, http
 from common.errors import FetchError, ParseError, ToolError
 from common.parse import parse_html, parse_xml
 
@@ -427,3 +429,45 @@ def test_fetch_still_allows_referer_header(http_env, monkeypatch):
     )
     assert captured["referer"] == "https://sugang.example.ac.kr/"
     assert captured["cookie"] is None
+
+
+def _reload_cache():
+    import importlib
+
+    return importlib.reload(cache)
+
+
+def test_cache_dir_defaults_to_dot_cache_next_to_code(monkeypatch):
+    """MJC_CACHE_DIR가 없으면 지금처럼 코드 폴더 상위의 .cache를 쓴다(dh-21)."""
+    monkeypatch.delenv("MJC_CACHE_DIR", raising=False)
+    try:
+        reloaded = _reload_cache()
+        expected = Path(reloaded.__file__).resolve().parent.parent / ".cache"
+        assert reloaded.CACHE_DIR == expected
+    finally:
+        monkeypatch.undo()
+        _reload_cache()
+
+
+def test_cache_dir_follows_environment_variable(monkeypatch, tmp_path):
+    """MJC_CACHE_DIR를 주면 그 폴더에 캐시를 쓴다. 패키지로 설치했을 때 설치 폴더 대신 쓸 곳."""
+    target = tmp_path / "mjc-cache"
+    monkeypatch.setenv("MJC_CACHE_DIR", str(target))
+    try:
+        reloaded = _reload_cache()
+        assert reloaded.CACHE_DIR == target
+        reloaded.with_fallback("k", lambda: {"v": 1})
+        assert (target / "k.json").exists()
+    finally:
+        monkeypatch.undo()
+        _reload_cache()
+
+
+def test_empty_cache_dir_variable_means_default(monkeypatch):
+    monkeypatch.setenv("MJC_CACHE_DIR", "")
+    try:
+        reloaded = _reload_cache()
+        assert reloaded.CACHE_DIR.name == ".cache"
+    finally:
+        monkeypatch.undo()
+        _reload_cache()

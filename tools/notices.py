@@ -21,6 +21,7 @@ from common.parse import parse_html
 LIST_URL = "https://www.mjc.ac.kr/bbs/data/list.do"
 VIEW_URL = "https://www.mjc.ac.kr/bbs/data/view.do"
 MAX_BODY_CHARS = 4000
+MAX_LIMIT = 50
 _IMAGE_ONLY_BODY = (
     "(이 공지의 본문은 이미지로 작성되어 텍스트를 추출할 수 없습니다. "
     "body_images의 이미지 링크를 사용자에게 안내하거나, "
@@ -79,10 +80,12 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
     return notices
 
 
-def _fetch_list(menu_idx: int) -> dict:
-    notices = parse_notice_list(
-        fetch(LIST_URL, params={"menu_idx": str(menu_idx)}), menu_idx
-    )
+def _fetch_list(menu_idx: int, page: int = 1) -> dict:
+    params = {"menu_idx": str(menu_idx)}
+    if page > 1:
+        # 첫 쪽 요청은 지금까지와 같게 둔다(기존 캐시와 동작을 건드리지 않는다).
+        params["pageIndex"] = str(page)
+    notices = parse_notice_list(fetch(LIST_URL, params=params), menu_idx)
     return {"notices": [n.model_dump(mode="json") for n in notices]}
 
 
@@ -106,21 +109,35 @@ def search_notices(
     until: str | None = None,
     sort: NoticeSort = "board",
     exclude_pinned: bool = False,
+    keyword: str | None = None,
+    page: int = 1,
 ) -> NoticeList:
-    """명지전문대 공지 게시판 첫 쪽의 글 목록을 조회한다.
+    """명지전문대 공지 게시판의 글 목록을 한 쪽씩 조회한다.
 
     category: general(일반 공지사항), academic(학사), scholarship(장학), job(채용)
     since, until: 작성일 범위(YYYY-MM-DD). 두 날짜 모두 당일을 포함한다.
                   since가 until보다 늦으면 오류.
-                  게시판 첫 쪽(상단 고정 글 + 최신 일반 글)에 있는 글만 거른다.
-                  첫 쪽에서 가장 오래된 일반 글의 작성일이 기준이다(exclude_pinned=true,
+                  조회한 쪽에 있는 글만 거른다(1쪽은 상단 고정 글 + 일반 글,
+                  2쪽부터는 고정 글이 먼저 빠져 일반 글만 남는다).
+                  그 쪽에서 가장 오래된 일반 글의 작성일이 기준이다(exclude_pinned=true,
                   sort=oldest, limit=1로 확인). 기준일 이전 날짜가 기간에 하루라도
                   포함되면 결과가 비거나 일부만 나오므로, 결과를 그 기간의 전체 공지로
-                  단정하지 말 것.
+                  단정하지 말 것. 더 이전 글은 page를 올려 조회한다.
     sort: board(게시판 순서 — 상단 고정 글이 먼저, 그다음 일반 글 최신순),
           newest(작성일 최신순), oldest(작성일 오래된순)
     exclude_pinned: true면 상단 고정 글을 뺀다.
-    필터·정렬을 적용한 뒤 limit개까지 돌려준다.
+    keyword: 제목에 이 글자가 들어간 글만 남긴다. 제목만 보고 대소문자는 가리지
+             않으며, 전각으로 쓴 영문·숫자는 반각과 다른 글자로 본다.
+             조회한 쪽 안에서만 거른다. 다른 쪽의 글은 찾지 않는다.
+    page: 1부터. 올릴수록 오래된 글이다. 상단 고정 글은 쪽마다 되풀이되므로
+          2쪽 이상에서는 결과에서 뺀다. 필터(keyword·since·until·exclude_pinned)
+          없이 조회했을 때 빈 목록이 오면 마지막 쪽을 넘긴 것이다(필터를 걸었을
+          때의 빈 목록은 그 쪽에 맞는 글이 없다는 뜻일 뿐이다).
+    필터·정렬을 적용한 뒤 limit개(최대 50개)까지 돌려준다. limit은 그 쪽의 결과를
+    자르고, 잘렸다는 표시는 응답에 없다. board 순서에서는 고정 글이 먼저 오므로
+    기본값 10은 일반 글을 하나도 남기지 않을 수 있다(일반 공지 1쪽 실측: 고정 13 +
+    일반 15 중 고정 10건만). 최근 글을 보려면 sort=newest나 exclude_pinned=true를
+    쓰고, 한 쪽을 빠뜨리지 않고 모으려면 limit을 50까지 올린 뒤 page를 넘길 것.
     본문 전문이 필요하면 결과의 notice_id를 get_notice에 넘긴다.
     """
     if category not in BOARDS:
@@ -131,26 +148,35 @@ def search_notices(
         raise ToolError(
             "since가 until보다 늦습니다. 두 날짜의 순서를 바꿔 다시 요청해 주세요."
         )
+    if page < 1:
+        raise ToolError("page는 1 이상의 정수여야 합니다.")
     menu_idx, board_name = BOARDS[category]
 
-    data, stale_age_min = with_fallback(
-        f"notices_{category}", lambda: _fetch_list(menu_idx)
-    )
+    # 쪽마다 캐시를 따로 둔다. 첫 쪽 키는 그대로여서 옛 캐시가 그대로 읽히고,
+    # 다음 쪽 조회가 실패했을 때 첫 쪽 캐시를 그 쪽인 것처럼 돌려주지 않는다.
+    key = f"notices_{category}" if page == 1 else f"notices_{category}_p{page}"
+    data, stale_age_min = with_fallback(key, lambda: _fetch_list(menu_idx, page))
     notices = [NoticeSummary.model_validate(n) for n in data["notices"]]
 
     # 필터·정렬은 캐시에서 읽은 값에도 똑같이 적용되도록 조회 뒤에 한다.
+    if page > 1:
+        # 고정 글은 쪽마다 같은 글이 되풀이된다. 중복으로 내보내지 않는다.
+        notices = [n for n in notices if not n.pinned]
     if exclude_pinned:
         notices = [n for n in notices if not n.pinned]
     if since is not None:
         notices = [n for n in notices if n.posted_on >= since]
     if until is not None:
         notices = [n for n in notices if n.posted_on <= until]
+    if keyword is not None and keyword.strip():
+        needle = keyword.strip().casefold()
+        notices = [n for n in notices if needle in n.title.casefold()]
     if sort != "board":
         notices.sort(key=lambda n: n.posted_on, reverse=sort == "newest")
 
     return NoticeList(
         category=board_name,
-        notices=notices[: max(1, limit)],
+        notices=notices[: min(max(1, limit), MAX_LIMIT)],
         stale_age_min=stale_age_min,
     )
 

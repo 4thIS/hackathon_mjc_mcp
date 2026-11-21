@@ -34,3 +34,16 @@ def test_list_departments_no_login_required():
 
     sig = inspect.signature(list_departments)
     assert len(sig.parameters) == 0
+
+
+def test_tool_description_does_not_point_to_login_only_tool():
+    """원격 서버에는 search_courses가 없다. 설명이 그 도구를 가리키면 안 된다."""
+    assert "search_courses" not in list_departments.__doc__
+
+
+def test_code_field_description_does_not_point_to_login_only_tool():
+    from common.models import DepartmentList
+
+    props = DepartmentList.model_json_schema()["$defs"]["Department"]["properties"]
+    assert props["code"]["description"]
+    assert "search_courses" not in props["code"]["description"]

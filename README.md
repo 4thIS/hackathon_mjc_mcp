@@ -41,8 +41,8 @@ flowchart LR
 ## 30초 설치
 
 ```bash
-git clone https://github.com/4thIS/hachathon_mjc_mcp.git
-cd hachathon_mjc_mcp
+git clone https://github.com/4thIS/hackathon_mjc_mcp.git
+cd hackathon_mjc_mcp
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 ```
@@ -55,8 +55,8 @@ AI 클라이언트 설정(`.mcp.json` 등)에 아래를 추가하고 클라이�
   "mcpServers": {
     "mjc": {
       "type": "stdio",
-      "command": "C:\\경로\\hachathon_mjc_mcp\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\경로\\hachathon_mjc_mcp\\server.py"]
+      "command": "C:\\경로\\hackathon_mjc_mcp\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\경로\\hackathon_mjc_mcp\\server.py"]
     }
   }
 }
@@ -132,8 +132,8 @@ sequenceDiagram
 
 | 툴 | 하는 일 | 주요 인자 | 데이터 출처 |
 |---|---|---|---|
-| `get_library_seats` | 열람실 3곳(집중학습공간·개방형학습공간·미디어실) 실시간 좌석 현황 | 없음 | 도서관 좌석 시스템 |
-| `search_notices` | 공지 게시판 최신 글 목록 | `category`: `general`·`academic`·`scholarship`·`job` / `limit` | www.mjc.ac.kr 게시판 |
+| `get_library_seats` | 열람실 3곳(집중학습공간·개방형학습공간·미디어실)의 실시간 좌석 현황·이용률(%)·혼잡 단계(여유·보통·혼잡)와 조회 시각 | 없음 | 도서관 좌석 시스템 |
+| `search_notices` | 공지 게시판의 글 목록(한 쪽씩) | `category`: `general`·`academic`·`scholarship`·`job` / `page` / `limit`(최대 50) / `since`·`until` / `keyword` / `sort` / `exclude_pinned` | www.mjc.ac.kr 게시판 |
 | `get_notice` | 공지 한 건의 본문, 첨부파일 목록, 본문 이미지 링크, 원문 페이지 주소 | `notice_id` (목록이 돌려준 값 그대로) | www.mjc.ac.kr 게시판 |
 | `list_departments` | 학과 목록(이름·코드). 로그인 불필요 | 없음 | sugang(정적 매핑) |
 | `search_courses` | 개설 강좌 검색. **로그인 필요** — 아래 참고 | `department_code`(목록이 돌려준 값), `course_type`, `grade`, `keyword` | sugang 수강신청 시스템 |
@@ -191,7 +191,9 @@ flowchart TD
 
 | 한계 | 어떻게 되는가 |
 |---|---|
-| 게시판 페이지네이션 미지원 | 각 게시판의 첫 페이지 범위 안에서만 조회됩니다. 오래된 공지는 찾지 못합니다 |
+| 공지 목록은 한 번에 한 쪽씩 | `search_notices`의 `page`(1부터, 올릴수록 오래된 글)로 다음 쪽을 봅니다. 쪽마다 되풀이되는 상단 고정 글은 2쪽부터 빠지고, 필터 없이 조회한 빈 목록은 마지막 쪽을 넘겼다는 뜻입니다 |
+| 날짜 필터·제목 키워드의 범위 | 조회한 쪽 안에서만 거릅니다(`keyword`·`since`·`until`·`exclude_pinned`). 이때의 빈 목록은 그 쪽에 맞는 글이 없다는 뜻일 뿐, 게시판 전체에 없다는 뜻이 아닙니다 |
+| `limit`의 잘림 | 그 쪽의 결과를 최대 50건까지 자르고, 잘렸다는 표시는 없습니다. 고정 글이 많은 게시판에서는 기본값 10이 고정 글만 남길 수 있어, 최근 글은 `sort=newest`나 `exclude_pinned=true`로 보고 한 쪽을 다 보려면 `limit`을 50으로 올립니다 |
 | 본문이 이미지인 공지 | 텍스트를 추출할 수 없습니다. 그 사실을 알리는 문구와 함께 이미지 링크(`body_images`)·원문 주소(`source_url`)·첨부파일 목록을 돌려줍니다 — 지어내지 않고 사람이 직접 보게 넘깁니다 |
 | 본문 4000자 초과 | 잘립니다. `truncated` 필드로 알려, AI가 잘린 내용을 전체처럼 인용하지 않게 합니다 |
 | 학교 사이트 구조 변경 | 파싱이 깨집니다. 다만 파싱 계층을 분리해 해당 툴 파일 하나만 고치면 되게 했습니다 |

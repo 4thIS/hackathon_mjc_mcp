@@ -4,7 +4,6 @@ import threading
 import httpx
 import pytest
 
-from pathlib import Path
 
 from common import cache, http
 from common.errors import FetchError, ParseError, ToolError

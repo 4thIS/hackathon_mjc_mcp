@@ -437,13 +437,19 @@ def _reload_cache():
     return importlib.reload(cache)
 
 
-def test_cache_dir_defaults_to_dot_cache_next_to_code(monkeypatch):
-    """MJC_CACHE_DIR가 없으면 지금처럼 코드 폴더 상위의 .cache를 쓴다(dh-21)."""
+def test_cache_dir_defaults_to_user_cache_folder(monkeypatch, tmp_path):
+    """MJC_CACHE_DIR가 없으면 사용자 캐시 폴더 아래 mjc-mcp/cache를 쓴다(dh-21).
+
+    패키지로 설치하면 코드 폴더가 site-packages라 쓸 수 없거나 여러 프로젝트가 함께 쓰게 되므로,
+    로그인 세션 폴더(common/session.py)와 같은 사용자 캐시 폴더를 기본값으로 한다.
+    """
     monkeypatch.delenv("MJC_CACHE_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     try:
         reloaded = _reload_cache()
-        expected = Path(reloaded.__file__).resolve().parent.parent / ".cache"
-        assert reloaded.CACHE_DIR == expected
+        assert reloaded.CACHE_DIR == tmp_path / "mjc-mcp" / "cache"
+        assert "site-packages" not in str(reloaded.CACHE_DIR)
     finally:
         monkeypatch.undo()
         _reload_cache()
@@ -463,11 +469,13 @@ def test_cache_dir_follows_environment_variable(monkeypatch, tmp_path):
         _reload_cache()
 
 
-def test_empty_cache_dir_variable_means_default(monkeypatch):
+def test_empty_cache_dir_variable_means_default(monkeypatch, tmp_path):
     monkeypatch.setenv("MJC_CACHE_DIR", "")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     try:
         reloaded = _reload_cache()
-        assert reloaded.CACHE_DIR.name == ".cache"
+        assert reloaded.CACHE_DIR == tmp_path / "mjc-mcp" / "cache"
     finally:
         monkeypatch.undo()
         _reload_cache()

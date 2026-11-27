@@ -590,7 +590,9 @@ def test_other_block_tags_also_break_lines(tag):
 
 # --- ms-04: 병합 칸(rowspan·colspan) 풀기 ---
 
-MERGED_FIXTURE = Path(__file__).parent / "fixtures" / "notice_detail_merged_cells.html"
+# 장학 공지(BD0000001001)는 mj-01이 첨부 회귀용으로 이미 저장해 둔 것과 같은 공지다.
+# 사본을 또 두지 않고 그 파일을 쓴다 — 조회수만 다르고 본문은 바이트까지 같다.
+MERGED_FIXTURE = Path(__file__).parent / "fixtures" / "notice_detail_attachments.html"
 MERGED_URL = (
     "https://www.mjc.ac.kr/bbs/data/view.do"
     "?menu_idx=208&bbs_mst_idx=BM0000000032&data_idx=BD0000001001"

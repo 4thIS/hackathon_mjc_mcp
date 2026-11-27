@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Literal
 from urllib.parse import urlencode, urljoin
 
+from bs4 import Comment, NavigableString, Tag
 from mcp.types import ToolAnnotations
 
 from common.cache import with_fallback
@@ -21,6 +22,7 @@ from common.parse import parse_html
 LIST_URL = "https://www.mjc.ac.kr/bbs/data/list.do"
 VIEW_URL = "https://www.mjc.ac.kr/bbs/data/view.do"
 MAX_BODY_CHARS = 4000
+MAX_LIMIT = 50
 _IMAGE_ONLY_BODY = (
     "(이 공지의 본문은 이미지로 작성되어 텍스트를 추출할 수 없습니다. "
     "body_images의 이미지 링크를 사용자에게 안내하거나, "
@@ -39,6 +41,18 @@ NoticeCategory = Literal["general", "academic", "scholarship", "job"]
 NoticeSort = Literal["board", "newest", "oldest"]
 
 _FN_VIEW = re.compile(r"fn_view\('(BM\d+)','(BD\d+)'")
+
+# 이 태그의 앞뒤에서만 줄을 바꾼다. 나머지(span, b, font, a 등)는 글자를 이어 붙인다.
+_BLOCK_TAGS = frozenset(
+    {
+        "address", "article", "aside", "blockquote", "center", "dd", "details",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav",
+        "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot",
+        "th", "thead", "ul",
+    }
+)
+_SKIP_TAGS = frozenset({"script", "style"})
 
 
 def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
@@ -79,10 +93,131 @@ def parse_notice_list(content: bytes, menu_idx: int) -> list[NoticeSummary]:
     return notices
 
 
-def _fetch_list(menu_idx: int) -> dict:
-    notices = parse_notice_list(
-        fetch(LIST_URL, params={"menu_idx": str(menu_idx)}), menu_idx
-    )
+def _span(cell: Tag, name: str, limit: int) -> int:
+    """칸의 rowspan·colspan 값. 숫자가 아니거나 1보다 작으면 1로 본다."""
+    try:
+        value = int(cell.get(name, "1"))
+    except (TypeError, ValueError):
+        return 1
+    return min(max(value, 1), limit)
+
+
+def _flatten_lines(element: Tag) -> list[str]:
+    """본문을 줄 목록으로 만든다.
+
+    편집기가 글자를 span 조각으로 잘게 나눠 저장하므로, 블록 경계와 <br>에서만
+    줄을 바꾸고 원문의 공백·줄바꿈은 공백 하나로 접는다. 표는 행 하나를
+    "칸 | 칸" 한 줄로 남겨 칸의 순서를 잃지 않게 한다. 합쳐진 칸(rowspan·colspan)은
+    걸친 행·열마다 다시 채워 행마다 열 위치가 머리 행과 같게 한다. 칸이 하나뿐인
+    행은 칸 안의 줄을 그대로 둔다.
+    """
+    lines: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        line = " ".join("".join(buffer).split())
+        buffer.clear()
+        if line:
+            lines.append(line)
+
+    def add_row(row: Tag, carried: dict[int, tuple[int, list[str]]]) -> None:
+        # carried: 열 번호 -> (아직 채울 행 수, 위 행에서 rowspan으로 내려온 칸의 줄)
+        cells: list[list[str]] = []
+        own = 0  # 이 행에 직접 적힌 칸 수
+        from_above = 0  # 위 행에서 내려와 이 행을 채운 칸 수
+
+        def consume(index: int) -> list[str]:
+            """내려온 칸을 이 행에서 쓰고, 남은 행 수를 하나 줄인다."""
+            left, text = carried.pop(index)
+            if left > 1:
+                carried[index] = (left - 1, text)
+            return text
+
+        for cell in row.find_all(["td", "th"], recursive=False):
+            while len(cells) in carried:
+                cells.append(consume(len(cells)))
+                from_above += 1
+            own += 1
+            text = _flatten_lines(cell)
+            rowspan = _span(cell, "rowspan", 65534)
+            for _ in range(_span(cell, "colspan", 1000)):
+                index = len(cells)
+                if index in carried:
+                    # 이 행의 칸이 내려오던 칸을 덮었다. 덮인 쪽을 여기서 끝내지 않으면
+                    # 다음 행에 한 박자 늦게 끼어들어 열이 밀린다.
+                    consume(index)
+                if rowspan > 1:
+                    carried[index] = (rowspan - 1, text)
+                cells.append(text)
+        while carried and max(carried) >= len(cells):
+            index = len(cells)
+            if index in carried:
+                cells.append(consume(index))
+                from_above += 1
+            else:
+                cells.append([])
+
+        if own == 1 and from_above == 0:
+            # 이 행에 적힌 칸이 하나뿐이고 내려온 칸도 없으면 표가 아니라 테두리 상자다.
+            # 칸 안의 줄을 그대로 두고, 전폭 칸(colspan)이라고 글을 반복하지 않는다.
+            lines.extend(cells[0])
+        elif any(cells):
+            lines.append(" | ".join(" ".join(cell) for cell in cells))
+
+    def walk_table(table: Tag) -> None:
+        # rowspan은 같은 표 안에서만 이어진다. 다음 표로 넘어가지 않게 표마다 새로 센다.
+        carried: dict[int, tuple[int, list[str]]] = {}
+        for child in table.children:
+            if isinstance(child, Tag) and child.name in ("thead", "tbody", "tfoot"):
+                for part in child.children:
+                    if isinstance(part, Tag) and part.name == "tr":
+                        add_row(part, carried)
+                    else:
+                        walk(part)
+                        flush()
+            elif isinstance(child, Tag) and child.name == "tr":
+                add_row(child, carried)
+            else:
+                walk(child)
+                flush()
+
+    def walk(node) -> None:
+        if isinstance(node, Comment):
+            return
+        if isinstance(node, NavigableString):
+            buffer.append(str(node))
+            return
+        if not isinstance(node, Tag) or node.name in _SKIP_TAGS:
+            return
+        if node.name == "br":
+            flush()
+        elif node.name == "table":
+            flush()
+            walk_table(node)
+        elif node.name == "tr":
+            flush()
+            add_row(node, {})
+        elif node.name in _BLOCK_TAGS:
+            flush()
+            for child in node.children:
+                walk(child)
+            flush()
+        else:
+            for child in node.children:
+                walk(child)
+
+    for child in element.children:
+        walk(child)
+    flush()
+    return lines
+
+
+def _fetch_list(menu_idx: int, page: int = 1) -> dict:
+    params = {"menu_idx": str(menu_idx)}
+    if page > 1:
+        # 첫 쪽 요청은 지금까지와 같게 둔다(기존 캐시와 동작을 건드리지 않는다).
+        params["pageIndex"] = str(page)
+    notices = parse_notice_list(fetch(LIST_URL, params=params), menu_idx)
     return {"notices": [n.model_dump(mode="json") for n in notices]}
 
 
@@ -106,21 +241,35 @@ def search_notices(
     until: str | None = None,
     sort: NoticeSort = "board",
     exclude_pinned: bool = False,
+    keyword: str | None = None,
+    page: int = 1,
 ) -> NoticeList:
-    """명지전문대 공지 게시판 첫 쪽의 글 목록을 조회한다.
+    """명지전문대 공지 게시판의 글 목록을 한 쪽씩 조회한다.
 
     category: general(일반 공지사항), academic(학사), scholarship(장학), job(채용)
     since, until: 작성일 범위(YYYY-MM-DD). 두 날짜 모두 당일을 포함한다.
                   since가 until보다 늦으면 오류.
-                  게시판 첫 쪽(상단 고정 글 + 최신 일반 글)에 있는 글만 거른다.
-                  첫 쪽에서 가장 오래된 일반 글의 작성일이 기준이다(exclude_pinned=true,
+                  조회한 쪽에 있는 글만 거른다(1쪽은 상단 고정 글 + 일반 글,
+                  2쪽부터는 고정 글이 먼저 빠져 일반 글만 남는다).
+                  그 쪽에서 가장 오래된 일반 글의 작성일이 기준이다(exclude_pinned=true,
                   sort=oldest, limit=1로 확인). 기준일 이전 날짜가 기간에 하루라도
                   포함되면 결과가 비거나 일부만 나오므로, 결과를 그 기간의 전체 공지로
-                  단정하지 말 것.
+                  단정하지 말 것. 더 이전 글은 page를 올려 조회한다.
     sort: board(게시판 순서 — 상단 고정 글이 먼저, 그다음 일반 글 최신순),
           newest(작성일 최신순), oldest(작성일 오래된순)
     exclude_pinned: true면 상단 고정 글을 뺀다.
-    필터·정렬을 적용한 뒤 limit개까지 돌려준다.
+    keyword: 제목에 이 글자가 들어간 글만 남긴다. 제목만 보고 대소문자는 가리지
+             않으며, 전각으로 쓴 영문·숫자는 반각과 다른 글자로 본다.
+             조회한 쪽 안에서만 거른다. 다른 쪽의 글은 찾지 않는다.
+    page: 1부터. 올릴수록 오래된 글이다. 상단 고정 글은 쪽마다 되풀이되므로
+          2쪽 이상에서는 결과에서 뺀다. 필터(keyword·since·until·exclude_pinned)
+          없이 조회했을 때 빈 목록이 오면 마지막 쪽을 넘긴 것이다(필터를 걸었을
+          때의 빈 목록은 그 쪽에 맞는 글이 없다는 뜻일 뿐이다).
+    필터·정렬을 적용한 뒤 limit개(최대 50개)까지 돌려준다. limit은 그 쪽의 결과를
+    자르고, 잘렸다는 표시는 응답에 없다. board 순서에서는 고정 글이 먼저 오므로
+    기본값 10은 일반 글을 하나도 남기지 않을 수 있다(일반 공지 1쪽 실측: 고정 13 +
+    일반 15 중 고정 10건만). 최근 글을 보려면 sort=newest나 exclude_pinned=true를
+    쓰고, 한 쪽을 빠뜨리지 않고 모으려면 limit을 50까지 올린 뒤 page를 넘길 것.
     본문 전문이 필요하면 결과의 notice_id를 get_notice에 넘긴다.
     """
     if category not in BOARDS:
@@ -131,26 +280,35 @@ def search_notices(
         raise ToolError(
             "since가 until보다 늦습니다. 두 날짜의 순서를 바꿔 다시 요청해 주세요."
         )
+    if page < 1:
+        raise ToolError("page는 1 이상의 정수여야 합니다.")
     menu_idx, board_name = BOARDS[category]
 
-    data, stale_age_min = with_fallback(
-        f"notices_{category}", lambda: _fetch_list(menu_idx)
-    )
+    # 쪽마다 캐시를 따로 둔다. 첫 쪽 키는 그대로여서 옛 캐시가 그대로 읽히고,
+    # 다음 쪽 조회가 실패했을 때 첫 쪽 캐시를 그 쪽인 것처럼 돌려주지 않는다.
+    key = f"notices_{category}" if page == 1 else f"notices_{category}_p{page}"
+    data, stale_age_min = with_fallback(key, lambda: _fetch_list(menu_idx, page))
     notices = [NoticeSummary.model_validate(n) for n in data["notices"]]
 
     # 필터·정렬은 캐시에서 읽은 값에도 똑같이 적용되도록 조회 뒤에 한다.
+    if page > 1:
+        # 고정 글은 쪽마다 같은 글이 되풀이된다. 중복으로 내보내지 않는다.
+        notices = [n for n in notices if not n.pinned]
     if exclude_pinned:
         notices = [n for n in notices if not n.pinned]
     if since is not None:
         notices = [n for n in notices if n.posted_on >= since]
     if until is not None:
         notices = [n for n in notices if n.posted_on <= until]
+    if keyword is not None and keyword.strip():
+        needle = keyword.strip().casefold()
+        notices = [n for n in notices if needle in n.title.casefold()]
     if sort != "board":
         notices.sort(key=lambda n: n.posted_on, reverse=sort == "newest")
 
     return NoticeList(
         category=board_name,
-        notices=notices[: max(1, limit)],
+        notices=notices[: min(max(1, limit), MAX_LIMIT)],
         stale_age_min=stale_age_min,
     )
 
@@ -171,7 +329,12 @@ def parse_notice_detail(content: bytes, source_url: str) -> NoticeDetail:
             info[header.get_text(strip=True)] = cell.get_text(strip=True)
 
     memo = view.select_one("#divMemo")
-    body = memo.get_text("\n", strip=True) if memo is not None else ""
+    try:
+        body = "\n".join(_flatten_lines(memo)) if memo is not None else ""
+    except RecursionError:
+        # 태그가 재귀 한도를 넘게 겹친 본문. ToolError 경계 안에 머물러야
+        # get_notice의 캐시 폴백이 동작한다.
+        raise ParseError("공지 본문") from None
     truncated = len(body) > MAX_BODY_CHARS
     body = body[:MAX_BODY_CHARS] if body else _IMAGE_ONLY_BODY
 

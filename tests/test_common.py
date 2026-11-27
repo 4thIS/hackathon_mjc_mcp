@@ -478,3 +478,14 @@ def test_empty_cache_dir_variable_means_default(monkeypatch, tmp_path):
     finally:
         monkeypatch.undo()
         _reload_cache()
+
+
+def test_cache_dir_variable_expands_home(monkeypatch):
+    monkeypatch.setenv("MJC_CACHE_DIR", "~/mjc-cache")
+    try:
+        reloaded = _reload_cache()
+        assert "~" not in str(reloaded.CACHE_DIR)
+        assert reloaded.CACHE_DIR.name == "mjc-cache"
+    finally:
+        monkeypatch.undo()
+        _reload_cache()

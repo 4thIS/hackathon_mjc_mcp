@@ -19,7 +19,7 @@ from common.errors import ToolError
 
 
 def _default_cache_dir() -> Path:
-    """사용자 캐시 폴더 아래 mjc-mcp/cache. 로그인 세션 폴더(common/session.py)와 같은 기준이다.
+    """사용자 캐시 폴더 아래 mjc-mcp/cache. 로그인 세션 폴더(common/session.py)와 같은 사용자 캐시 폴더를 쓴다.
 
     코드 폴더를 기준으로 하면 패키지로 설치했을 때 site-packages 안이 되어 쓸 수 없거나 여러 프로젝트가 함께 쓴다.
     폴더는 캐시를 처음 쓸 때 만든다.
@@ -32,7 +32,7 @@ def _default_cache_dir() -> Path:
 
 
 # 캐시 위치. 환경 변수 MJC_CACHE_DIR로 바꿀 수 있고, 없거나 비어 있으면 사용자 캐시 폴더다.
-CACHE_DIR = Path(os.environ.get("MJC_CACHE_DIR") or _default_cache_dir())
+CACHE_DIR = Path(os.environ.get("MJC_CACHE_DIR") or _default_cache_dir()).expanduser()
 
 # stdout은 MCP stdio transport의 JSON-RPC 채널이므로 로그는 stderr로만 내보낸다.
 _logger = logging.getLogger(__name__)

@@ -33,5 +33,5 @@ jobs:
           python -m pip install .
           cp -r tests "$RUNNER_TEMP/tests"
           cd "$RUNNER_TEMP"
-          python -c "import tools; assert 'site-packages' in tools.__file__, tools.__file__"
+          python -c "import common, tools; assert all('site-packages' in m.__file__ for m in (common, tools)), (common.__file__, tools.__file__)"
           python -m pytest tests/ -q

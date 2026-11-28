@@ -4,7 +4,8 @@ import threading
 import httpx
 import pytest
 
-from common import http
+
+from common import cache, http
 from common.errors import FetchError, ParseError, ToolError
 from common.parse import parse_html, parse_xml
 
@@ -427,3 +428,64 @@ def test_fetch_still_allows_referer_header(http_env, monkeypatch):
     )
     assert captured["referer"] == "https://sugang.example.ac.kr/"
     assert captured["cookie"] is None
+
+
+def _reload_cache():
+    import importlib
+
+    return importlib.reload(cache)
+
+
+def test_cache_dir_defaults_to_user_cache_folder(monkeypatch, tmp_path):
+    """MJC_CACHE_DIR가 없으면 사용자 캐시 폴더 아래 mjc-mcp/cache를 쓴다(dh-21).
+
+    패키지로 설치하면 코드 폴더가 site-packages라 쓸 수 없거나 여러 프로젝트가 함께 쓰게 되므로,
+    로그인 세션 폴더(common/session.py)와 같은 사용자 캐시 폴더를 기본값으로 한다.
+    """
+    monkeypatch.delenv("MJC_CACHE_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    try:
+        reloaded = _reload_cache()
+        assert reloaded.CACHE_DIR == tmp_path / "mjc-mcp" / "cache"
+        assert "site-packages" not in str(reloaded.CACHE_DIR)
+    finally:
+        monkeypatch.undo()
+        _reload_cache()
+
+
+def test_cache_dir_follows_environment_variable(monkeypatch, tmp_path):
+    """MJC_CACHE_DIR를 주면 그 폴더에 캐시를 쓴다. 패키지로 설치했을 때 설치 폴더 대신 쓸 곳."""
+    target = tmp_path / "mjc-cache"
+    monkeypatch.setenv("MJC_CACHE_DIR", str(target))
+    try:
+        reloaded = _reload_cache()
+        assert reloaded.CACHE_DIR == target
+        reloaded.with_fallback("k", lambda: {"v": 1})
+        assert (target / "k.json").exists()
+    finally:
+        monkeypatch.undo()
+        _reload_cache()
+
+
+def test_empty_cache_dir_variable_means_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("MJC_CACHE_DIR", "")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    try:
+        reloaded = _reload_cache()
+        assert reloaded.CACHE_DIR == tmp_path / "mjc-mcp" / "cache"
+    finally:
+        monkeypatch.undo()
+        _reload_cache()
+
+
+def test_cache_dir_variable_expands_home(monkeypatch):
+    monkeypatch.setenv("MJC_CACHE_DIR", "~/mjc-cache")
+    try:
+        reloaded = _reload_cache()
+        assert "~" not in str(reloaded.CACHE_DIR)
+        assert reloaded.CACHE_DIR.name == "mjc-cache"
+    finally:
+        monkeypatch.undo()
+        _reload_cache()

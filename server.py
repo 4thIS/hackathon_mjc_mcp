@@ -20,12 +20,13 @@ for _stream in (sys.stdin, sys.stdout):
 
 from mcp.server import MCPServer  # noqa: E402
 
-from tools import course_search, departments, library_seats, notices, syllabus  # noqa: E402
+from tools import academic_calendar, course_search, departments, library_seats, notices, syllabus  # noqa: E402
 
 mcp = MCPServer("mjc")
 library_seats.register(mcp)
 notices.register(mcp)
 departments.register(mcp)
+academic_calendar.register(mcp)
 course_search.register(mcp)
 syllabus.register(mcp)
 
